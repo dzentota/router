@@ -1,0 +1,30 @@
+{
+  "name": "dzentota/router",
+  "description": "Fast and flexible security aware router.",
+  "type": "library",
+  "license": "mit",
+  "authors": [
+    {
+      "name": "Alex Tatulchenkov",
+      "email": "webtota@gmail.com"
+    }
+  ],
+  "minimum-stability": "dev",
+  "require": {
+    "dzentota/typedvalue": "dev-master",
+    "ext-mbstring": "*"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^9.5"
+  },
+  "autoload": {
+    "psr-4": {
+      "dzentota\\Router\\": "src/"
+    },
+    "autoload-dev": {
+      "psr-4": {
+        "dzentota\\Router\\Test": "tests/"
+      }
+    }
+  }
+}
