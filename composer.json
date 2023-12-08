@@ -20,11 +20,6 @@
   "autoload": {
     "psr-4": {
       "dzentota\\Router\\": "src/"
-    },
-    "autoload-dev": {
-      "psr-4": {
-        "dzentota\\Router\\Test": "tests/"
-      }
     }
   }
 }
