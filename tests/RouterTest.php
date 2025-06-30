@@ -261,6 +261,34 @@ class RouterTest extends TestCase
         self::assertEquals($action, $r->findRoute('HEAD', '/')['action']);
     }
 
+    public function testParametersInMiddleOfRoute()
+    {
+        $r = new Router();
+        $action = 'UserUpdateAction';
+        $r->get('/user/{id}/update', $action, ['id' => Id::class]);
+
+        $result = $r->findRoute('GET', '/user/42/update');
+        self::assertEquals($action, $result['action']);
+        self::assertEquals('/user/{id}/update', $result['route']);
+        self::assertInstanceOf(Id::class, $result['params']['id']);
+        self::assertEquals('42', $result['params']['id']->toNative());
+    }
+
+    public function testParametersInMiddleAndEnd()
+    {
+        $r = new Router();
+        $action = 'UserPostUpdateAction';
+        $r->get('/user/{userId}/post/{postId}', $action, ['userId' => Id::class, 'postId' => Id::class]);
+
+        $result = $r->findRoute('GET', '/user/42/post/123');
+        self::assertEquals($action, $result['action']);
+        self::assertEquals('/user/{userId}/post/{postId}', $result['route']);
+        self::assertInstanceOf(Id::class, $result['params']['userId']);
+        self::assertInstanceOf(Id::class, $result['params']['postId']);
+        self::assertEquals('42', $result['params']['userId']->toNative());
+        self::assertEquals('123', $result['params']['postId']->toNative());
+    }
+
     public function testNotFound()
     {
         $this->expectException(NotFoundException::class);

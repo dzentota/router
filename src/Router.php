@@ -104,13 +104,13 @@ class Router
                 $node = $node[$v['use']];
             } elseif (isset($node['*'])
                 && ($val = $this->parseValue($node['*']['name'], $v['name'],
-                    $node['*']['exec']['constraints'][$node['*']['name']] ?? null))
+                    $node['*']['constraints'][$node['*']['name']] ?? null))
             ) {
                 $node = $node['*'];
                 $params[$node['name']] = $val;
             } elseif (isset($node['?'])
                 && ($val = $this->parseValue($node['?']['name'], $v['name'],
-                    $node['?']['exec']['constraints'][$node['?']['name']] ?? null))
+                    $node['?']['constraints'][$node['?']['name']] ?? null))
             ) {
                 $node = $node['?'];
                 $params[$node['name']] = $val;
@@ -208,9 +208,14 @@ class Router
         $tree = [];
         foreach ($routes as $route) {
             $node = &$tree;
-            foreach ($this->parseUri($route['route']) as $segment) {
+            $segments = $this->parseUri($route['route']);
+            foreach ($segments as $segment) {
                 if (!isset($node[$segment['use']])) {
                     $node[$segment['use']] = ['name' => $segment['name']];
+                }
+                // Store constraints on parameter nodes so they're available during matching
+                if ($segment['use'] === '*' || $segment['use'] === '?') {
+                    $node[$segment['use']]['constraints'] = $route['constraints'];
                 }
                 $node = &$node[$segment['use']];
             }
