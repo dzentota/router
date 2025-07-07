@@ -44,7 +44,7 @@ array(4) {
 The routes are added by calling `addRoute()` on the Router instance:
 
 ```php
-$r->addRoute($method, string $route, string $action, array $constraints = []);
+$r->addRoute($method, string $route, string $action, array $constraints = [], ?string $name = null);
 ```
 The $method is an HTTP method string for which a certain route should match. It is possible to specify multiple valid methods using an array:
 ```php
@@ -90,17 +90,74 @@ $r->get('/user/{id}', 'UserController@show', ['id' => Id::class])
 
 Params of the route enclosed in `{...?}` are considered optional, so that `/foo/{bar?}` will match both `/foo` and `/foo/bar`.
 
+### Named Routes
+
+Routes can be given names for easy URL generation in templates and redirects:
+
+```php
+// Define named routes
+$r->get('/users', 'UserController@index', [], 'users.index');
+$r->get('/users/{id}', 'UserController@show', ['id' => Id::class], 'users.show');
+$r->post('/users', 'UserController@create', [], 'users.create');
+```
+
+### URL Generation
+
+Generate URLs from named routes using the `generateUrl()` method:
+
+```php
+// Simple routes without parameters
+$url = $r->generateUrl('users.index'); // Returns: /users
+
+// Routes with parameters
+$url = $r->generateUrl('users.show', ['id' => '42']); // Returns: /users/42
+
+// Routes with optional parameters
+$r->get('/posts/{category?}', 'PostController@index', [], 'posts.index');
+$url1 = $r->generateUrl('posts.index'); // Returns: /posts
+$url2 = $r->generateUrl('posts.index', ['category' => 'tech']); // Returns: /posts/tech
+```
+
+The router validates parameters against their constraints before generating URLs:
+
+```php
+// This will throw an exception if 'invalid' doesn't pass Id validation
+$url = $r->generateUrl('users.show', ['id' => 'invalid']);
+```
+
+### Route Inspection
+
+You can inspect and work with named routes:
+
+```php
+// Check if a named route exists
+if ($r->hasRoute('users.show')) {
+    // Route exists
+}
+
+// Get all named routes
+$namedRoutes = $r->getNamedRoutes();
+```
+
 ### Shortcut methods for common request methods
 For the `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS` and `HEAD` request methods shortcut methods are available. 
 For example:
 ```php
 $r->get('/get-route', 'get_handler');
 $r->post('/post-route', 'post_handler');
+
+// With names
+$r->get('/users', 'UserController@index', [], 'users.index');
+$r->post('/users', 'UserController@create', [], 'users.create');
 ```
 Is equivalent to:
 ```php
 $r->addRoute('GET', '/get-route', 'get_handler');
 $r->addRoute('POST', '/post-route', 'post_handler');
+
+// With names
+$r->addRoute('GET', '/users', 'UserController@index', [], 'users.index');
+$r->addRoute('POST', '/users', 'UserController@create', [], 'users.create');
 ```
 Also, there is a virtual `ANY` method that matches any request method, so:
 
@@ -130,6 +187,19 @@ Will have the same result as:
 $r->addRoute('GET', '/admin/do-something', 'handler');
 $r->addRoute('GET', '/admin/do-another-thing', 'handler');
 $r->addRoute('GET', '/admin/do-something-else', 'handler');
+```
+
+Named routes work with groups as well:
+
+```php
+$r->addGroup('/admin', function (Router $r) {
+    $r->get('/users', 'AdminController@users', [], 'admin.users');
+    $r->get('/settings', 'AdminController@settings', [], 'admin.settings');
+});
+
+// Generate URLs
+$usersUrl = $r->generateUrl('admin.users'); // Returns: /admin/users
+$settingsUrl = $r->generateUrl('admin.settings'); // Returns: /admin/settings
 ```
 
 ### Caching

@@ -5,3 +5,4 @@ vendor
 .bash_history
 .phpunit.result.cache
 tmp
+memory-bank

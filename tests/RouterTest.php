@@ -305,6 +305,135 @@ class RouterTest extends TestCase
         $r->addRoute($expectedAllowedMethods, '/route', 'action');
         $r->findRoute('PATCH', '/route');
     }
+
+    public function testNamedRoutes()
+    {
+        $r = new Router();
+        $r->get('/users', 'UserIndex', [], 'users.index');
+        $r->get('/users/{id}', 'UserShow', ['id' => Id::class], 'users.show');
+        $r->post('/users', 'UserCreate', [], 'users.create');
+
+        // Test hasRoute
+        self::assertTrue($r->hasRoute('users.index'));
+        self::assertTrue($r->hasRoute('users.show'));
+        self::assertTrue($r->hasRoute('users.create'));
+        self::assertFalse($r->hasRoute('users.edit'));
+
+        // Test getNamedRoutes
+        $namedRoutes = $r->getNamedRoutes();
+        self::assertArrayHasKey('users.index', $namedRoutes);
+        self::assertArrayHasKey('users.show', $namedRoutes);
+        self::assertArrayHasKey('users.create', $namedRoutes);
+        self::assertEquals('/users', $namedRoutes['users.index']['route']);
+        self::assertEquals('/users/{id}', $namedRoutes['users.show']['route']);
+    }
+
+    public function testGenerateUrlSimple()
+    {
+        $r = new Router();
+        $r->get('/users', 'UserIndex', [], 'users.index');
+        $r->post('/contact', 'ContactForm', [], 'contact');
+
+        self::assertEquals('/users', $r->generateUrl('users.index'));
+        self::assertEquals('/contact', $r->generateUrl('contact'));
+    }
+
+    public function testGenerateUrlWithParameters()
+    {
+        $r = new Router();
+        $r->get('/users/{id}', 'UserShow', ['id' => Id::class], 'users.show');
+        $r->get('/users/{userId}/posts/{postId}', 'UserPostShow', 
+            ['userId' => Id::class, 'postId' => Id::class], 'users.posts.show');
+
+        self::assertEquals('/users/42', $r->generateUrl('users.show', ['id' => '42']));
+        self::assertEquals('/users/123/posts/456', 
+            $r->generateUrl('users.posts.show', ['userId' => '123', 'postId' => '456']));
+    }
+
+    public function testGenerateUrlWithOptionalParameters()
+    {
+        $r = new Router();
+        $r->get('/posts/{id?}', 'PostIndex', ['id' => Id::class], 'posts.index');
+        $r->get('/search/{query?}/{page?}', 'Search', [], 'search');
+
+        // Without optional parameters
+        self::assertEquals('/posts', $r->generateUrl('posts.index'));
+        self::assertEquals('/search', $r->generateUrl('search'));
+
+        // With optional parameters
+        self::assertEquals('/posts/123', $r->generateUrl('posts.index', ['id' => '123']));
+        self::assertEquals('/search/test', $r->generateUrl('search', ['query' => 'test']));
+        self::assertEquals('/search/test/2', $r->generateUrl('search', ['query' => 'test', 'page' => '2']));
+    }
+
+    public function testGenerateUrlInvalidRoute()
+    {
+        $this->expectException(\Exception::class);
+        $this->expectExceptionMessage("Named route 'nonexistent' not found");
+
+        $r = new Router();
+        $r->generateUrl('nonexistent');
+    }
+
+    public function testGenerateUrlMissingRequiredParameter()
+    {
+        $this->expectException(\Exception::class);
+        $this->expectExceptionMessage("Missing required parameter 'id' for route 'users.show'");
+
+        $r = new Router();
+        $r->get('/users/{id}', 'UserShow', ['id' => Id::class], 'users.show');
+        $r->generateUrl('users.show');
+    }
+
+    public function testGenerateUrlInvalidParameterConstraint()
+    {
+        $this->expectException(\Exception::class);
+        $this->expectExceptionMessage("Parameter 'id' does not match constraint for route 'users.show'");
+
+        $r = new Router();
+        $r->get('/users/{id}', 'UserShow', ['id' => Id::class], 'users.show');
+        $r->generateUrl('users.show', ['id' => 'invalid']);
+    }
+
+    public function testNamedRoutesWithGroups()
+    {
+        $r = new Router();
+        $r->addGroup('/admin', function (Router $r) {
+            $r->get('/users', 'AdminUserIndex', [], 'admin.users.index');
+            $r->get('/users/{id}', 'AdminUserShow', ['id' => Id::class], 'admin.users.show');
+        });
+
+        self::assertTrue($r->hasRoute('admin.users.index'));
+        self::assertTrue($r->hasRoute('admin.users.show'));
+        
+        self::assertEquals('/admin/users', $r->generateUrl('admin.users.index'));
+        self::assertEquals('/admin/users/42', $r->generateUrl('admin.users.show', ['id' => '42']));
+    }
+
+    public function testNamedRouteConvenienceMethods()
+    {
+        $r = new Router();
+        
+        // Test all HTTP methods with names
+        $r->get('/users', 'UserIndex', [], 'users.index');
+        $r->post('/users', 'UserCreate', [], 'users.create');
+        $r->put('/users/{id}', 'UserUpdate', ['id' => Id::class], 'users.update');
+        $r->patch('/users/{id}', 'UserPatch', ['id' => Id::class], 'users.patch');
+        $r->delete('/users/{id}', 'UserDelete', ['id' => Id::class], 'users.delete');
+        $r->head('/users', 'UserHead', [], 'users.head');
+        $r->options('/users', 'UserOptions', [], 'users.options');
+
+        self::assertTrue($r->hasRoute('users.index'));
+        self::assertTrue($r->hasRoute('users.create'));
+        self::assertTrue($r->hasRoute('users.update'));
+        self::assertTrue($r->hasRoute('users.patch'));
+        self::assertTrue($r->hasRoute('users.delete'));
+        self::assertTrue($r->hasRoute('users.head'));
+        self::assertTrue($r->hasRoute('users.options'));
+
+        self::assertEquals('/users', $r->generateUrl('users.index'));
+        self::assertEquals('/users/123', $r->generateUrl('users.update', ['id' => '123']));
+    }
 }
 
 class Id implements Typed

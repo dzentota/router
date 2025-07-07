@@ -9,13 +9,13 @@ use dzentota\Router\Exception\NotFoundException;
 use dzentota\TypedValue\Typed;
 
 /**
- * @method get(string $route, string $action, array $constraints = [])
- * @method post(string $route, string $action, array $constraints = [])
- * @method put(string $route, string $action, array $constraints = [])
- * @method delete(string $route, string $action, array $constraints = [])
- * @method patch(string $route, string $action, array $constraints = [])
- * @method head(string $route, string $action, array $constraints = [])
- * @method options(string $route, string $action, array $constraints = [])
+ * @method get(string $route, string $action, array $constraints = [], ?string $name = null)
+ * @method post(string $route, string $action, array $constraints = [], ?string $name = null)
+ * @method put(string $route, string $action, array $constraints = [], ?string $name = null)
+ * @method delete(string $route, string $action, array $constraints = [], ?string $name = null)
+ * @method patch(string $route, string $action, array $constraints = [], ?string $name = null)
+ * @method head(string $route, string $action, array $constraints = [], ?string $name = null)
+ * @method options(string $route, string $action, array $constraints = [], ?string $name = null)
  */
 class Router
 {
@@ -23,6 +23,7 @@ class Router
     private ?array $routesTree = null;
     private array $allowedMethods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'];
     protected string $currentGroupPrefix = '';
+    private array $namedRoutes = [];
 
     /**
      * Add new route to list of available routes
@@ -31,10 +32,11 @@ class Router
      * @param string $route
      * @param string $action
      * @param array $constraints
+     * @param string|null $name
      * @return Router
      * @throws \Exception
      */
-    public function addRoute($method, string $route, string $action, array $constraints = []): Router
+    public function addRoute($method, string $route, string $action, array $constraints = [], ?string $name = null): Router
     {
         $method = (array)$method;
         $route = $this->currentGroupPrefix . $route;
@@ -48,6 +50,15 @@ class Router
         }, $method === ['ANY'] ? $this->allowedMethods : $method);
 
         $this->rawRoutes[] = ['route' => $route, 'method' => $methodsMap, 'constraints' => $constraints];
+        
+        // Store named route for URL generation
+        if ($name !== null) {
+            $this->namedRoutes[$name] = [
+                'route' => $route,
+                'constraints' => $constraints
+            ];
+        }
+        
         return $this;
     }
 
@@ -245,8 +256,86 @@ class Router
             throw new \BadMethodCallException('Call to undefined method');
         }
 
-        array_unshift($params, $method);
-        call_user_func_array(array($this, 'addRoute'), $params);
-        return $this;
+        // Support name parameter: route($path, $action, $constraints = [], $name = null)
+        $route = $params[0] ?? '';
+        $action = $params[1] ?? '';
+        $constraints = $params[2] ?? [];
+        $name = $params[3] ?? null;
+
+        return $this->addRoute($method, $route, $action, $constraints, $name);
+    }
+
+    /**
+     * Generate URL from named route
+     *
+     * @param string $name
+     * @param array $parameters
+     * @return string
+     * @throws \Exception
+     */
+    public function generateUrl(string $name, array $parameters = []): string
+    {
+        if (!isset($this->namedRoutes[$name])) {
+            throw new \Exception("Named route '{$name}' not found");
+        }
+
+        $route = $this->namedRoutes[$name]['route'];
+        $constraints = $this->namedRoutes[$name]['constraints'];
+        
+        // Replace parameters in route pattern
+        $url = $route;
+        foreach ($parameters as $key => $value) {
+            // Check if parameter has constraints and validate
+            if (isset($constraints[$key])) {
+                $constraintClass = $constraints[$key];
+                if (!$constraintClass::tryParse($value, $typed)) {
+                    throw new \Exception("Parameter '{$key}' does not match constraint for route '{$name}'");
+                }
+                $value = $typed->toNative();
+            }
+            
+            // Replace both {key} and {key?} patterns
+            $url = str_replace(['{' . $key . '}', '{' . $key . '?}'], $value, $url);
+        }
+        
+        // Check for remaining required parameters
+        if (preg_match('/\{([^?}]+)\}/', $url, $matches)) {
+            throw new \Exception("Missing required parameter '{$matches[1]}' for route '{$name}'");
+        }
+        
+        // Remove optional parameters that weren't provided
+        $url = preg_replace('/\{[^}]+\?\}/', '', $url);
+        
+        // Clean up any double slashes and trailing slashes
+        $url = preg_replace('#/+#', '/', $url);
+        $url = rtrim($url, '/');
+        
+        // Ensure we always have at least a forward slash
+        if (empty($url)) {
+            $url = '/';
+        }
+        
+        return $url;
+    }
+
+    /**
+     * Get all named routes
+     *
+     * @return array
+     */
+    public function getNamedRoutes(): array
+    {
+        return $this->namedRoutes;
+    }
+
+    /**
+     * Check if a named route exists
+     *
+     * @param string $name
+     * @return bool
+     */
+    public function hasRoute(string $name): bool
+    {
+        return isset($this->namedRoutes[$name]);
     }
 }
