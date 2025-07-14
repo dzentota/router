@@ -1,262 +1,418 @@
 # Architecture
 
+This document describes the architecture and design principles of the dzentota/router library.
+
 ## Overview
 
-The dzentota Router is a fast and flexible security-aware routing library designed with security as a primary concern. It follows the principle that **there is no sense in accepting data from the user (via HTTP) without properly validating it against your domain**.
+The dzentota/router is a high-performance, security-first PHP routing library that implements a comprehensive PSR-15 middleware suite. The architecture follows modern PHP best practices with a focus on security, performance, and maintainability.
 
-## Design Principles
+## Core Architecture
 
-### Security First
+### 1. Router Core
 
-The router architecture is built around the **Parse, don't validate** principle from the [AppSec Manifesto](https://github.com/dzentota/AppSecManifesto). Instead of simply validating input and passing strings around, the router:
+The router core implements a tree-based route matching algorithm for optimal performance:
 
-1. **Parses** route parameters into strongly-typed domain objects
-2. **Validates** parameters against domain constraints using TypedValue objects
-3. **Ensures** type safety throughout the application
-
-### Minimized Attack Surface
-
-Following the **Absolute Zero** principle, the router:
-
-- Eliminates dynamic route compilation in production when using cached routes
-- Minimizes user-controlled input by requiring explicit type constraints
-- Uses the least expressive language necessary for route definition
-
-### Fail-Safe Design
-
-The router implements **graceful degradation** and **fail-hard** strategies:
-
-- Invalid input throws exceptions immediately (fail hard for interactive input)
-- Type constraints are mandatory for all dynamic route segments
-- Missing route names or invalid parameters result in clear exceptions
-
-## Core Components
-
-### Router Class
-
-The main `Router` class serves as the central coordinator and implements several architectural patterns:
-
-#### Route Registry Pattern
-- Maintains internal registries for routes (`$rawRoutes`) and named routes (`$namedRoutes`)
-- Provides methods to query and manipulate the route collection
-- Supports route groups with prefix inheritance
-
-#### Factory Pattern
-- HTTP method convenience methods (`get()`, `post()`, etc.) act as factories
-- `__call()` magic method provides a uniform interface for route creation
-
-#### Builder Pattern
-- Fluent interface allows method chaining for route definition
-- Progressive configuration of routes with optional parameters
-
-### Route Tree Structure
-
-The router uses a tree-based data structure for efficient route matching:
-
-```php
-[
-    '/' => [
-        'name' => '/',
-        'users' => [
-            'name' => 'users',
-            '*' => [
-                'name' => 'id',
-                'constraints' => ['id' => Id::class],
-                'exec' => [
-                    'route' => '/users/{id}',
-                    'method' => ['GET' => 'UserController@show'],
-                    'constraints' => ['id' => Id::class]
-                ]
-            ]
-        ]
-    ]
-]
+```
+Router
+├── Route Registration
+├── Route Tree Construction
+├── Route Matching
+├── Parameter Validation
+└── URL Generation
 ```
 
-This structure provides:
-- O(n) route matching where n is the number of path segments
-- Efficient parameter extraction and validation
-- Support for optional parameters with `?` suffix
+#### Route Tree Structure
 
-### Type System Integration
+Routes are organized in a tree structure for efficient matching:
 
-The router integrates deeply with the TypedValue system:
-
-```php
-interface Typed {
-    public static function validate($value): ValidationResult;
-    public static function tryParse($value, &$typed): bool;
-}
+```
+/
+├── api/
+│   └── users/
+│       ├── {id} (GET, POST)
+│       └── (POST)
+└── (GET)
 ```
 
-This ensures:
-- **Type Safety**: All route parameters are parsed into domain objects
-- **Validation**: Input is validated according to domain rules
-- **Security**: Invalid input is rejected before entering the application
+#### Type-Safe Parameters
 
-## Security Architecture
-
-### Input Validation Strategy
-
-The router implements multiple layers of input validation:
-
-1. **Route Structure Validation**: Ensures routes match expected patterns
-2. **Parameter Type Validation**: All parameters must have type constraints
-3. **Domain Validation**: TypedValue objects validate according to business rules
-
-### Attack Surface Minimization
-
-Following AppSec principles:
-
-#### No Dynamic Code Execution
-- Routes are statically defined
-- No eval() or dynamic code generation
-- Route compilation is deterministic
-
-#### Explicit Over Implicit
-- All route parameters must have explicit type constraints
-- No automatic type inference or coercion
-- Named routes are explicitly registered
-
-#### Fail Closed
-- Unknown routes return 404 (NotFoundException)
-- Invalid HTTP methods return 405 (MethodNotAllowedException) 
-- Invalid parameters throw domain-specific exceptions
-
-### URL Generation Security
-
-The `generateUrl()` method provides secure URL generation:
+All route parameters must have type constraints using the TypedValue system:
 
 ```php
-public function generateUrl(string $name, array $parameters = []): string
-{
-    // 1. Verify named route exists
-    if (!isset($this->namedRoutes[$name])) {
-        throw new \Exception("Named route '{$name}' not found");
-    }
-
-    // 2. Validate parameters against constraints
-    foreach ($parameters as $key => $value) {
-        if (isset($constraints[$key])) {
-            if (!$constraintClass::tryParse($value, $typed)) {
-                throw new \Exception("Parameter '{$key}' does not match constraint");
-            }
-        }
-    }
-
-    // 3. Generate URL safely
-    return $this->buildUrl($route, $parameters);
-}
-```
-
-This prevents:
-- **URL Injection**: Parameters are validated before inclusion
-- **Path Traversal**: Type constraints prevent malicious path components
-- **Parameter Pollution**: Only expected parameters are processed
-
-## Performance Considerations
-
-### Route Compilation
-
-The router supports two modes of operation:
-
-#### Development Mode
-- Routes are compiled on each request
-- Provides flexibility for rapid development
-- Includes comprehensive error reporting
-
-#### Production Mode  
-- Routes are pre-compiled using `dump()` and `load()`
-- Eliminates compilation overhead
-- Optimized tree structure for fast lookups
-
-### Memory Efficiency
-
-- Route tree is lazily compiled only when needed
-- Named routes are stored separately to avoid overhead during matching
-- Group prefixes are resolved at definition time, not runtime
-
-### Caching Strategy
-
-```php
-// Generate and cache route tree
-$routeTree = $router->dump();
-file_put_contents('routes.cache', serialize($routeTree));
-
-// Load cached routes in production
-$router->load(unserialize(file_get_contents('routes.cache')));
-```
-
-## Extension Points
-
-### Custom Type Constraints
-
-Implement the `Typed` interface for domain-specific validation:
-
-```php
-class Slug implements Typed
+class UserId implements Typed
 {
     use TypedValue;
-    
+
     public static function validate($value): ValidationResult
     {
         $result = new ValidationResult();
-        if (!preg_match('/^[a-z0-9-]+$/', $value)) {
-            $result->addError('Invalid slug format');
+        if (!is_numeric($value) || $value <= 0) {
+            $result->addError('Invalid user ID');
         }
         return $result;
     }
 }
 ```
 
-### Route Middleware Integration
+### 2. Middleware Architecture
 
-While the router focuses on routing concerns, it provides hooks for middleware:
+The middleware system follows PSR-15 standards with a comprehensive security-first approach:
 
-```php
-// Route definition includes action for middleware resolution
-$router->get('/protected', 'ProtectedController@action', [], 'protected');
-
-// Application resolves middleware based on action
-$route = $router->findRoute($method, $uri);
-$middleware = $this->resolveMiddleware($route['action']);
+```
+Request Flow:
+┌─────────────────┐
+│   HTTP Request  │
+└─────────┬───────┘
+          │
+┌─────────▼───────┐
+│  CORS Middleware│ ← Preflight handling
+└─────────┬───────┘
+          │
+┌─────────▼───────┐
+│  CSP Middleware │ ← Security headers
+└─────────┬───────┘
+          │
+┌─────────▼───────┐
+│Honeypot Middleware│ ← Bot detection
+└─────────┬───────┘
+          │
+┌─────────▼───────┐
+│ CSRF Middleware │ ← Token validation
+└─────────┬───────┘
+          │
+┌─────────▼───────┐
+│RouteMatch Middleware│ ← Route matching
+└─────────┬───────┘
+          │
+┌─────────▼───────┐
+│RouteDispatch Middleware│ ← Handler execution
+└─────────┬───────┘
+          │
+┌─────────▼───────┐
+│  HTTP Response  │
+└─────────────────┘
 ```
 
-## Testing Strategy
+## Security Middleware Suite
 
-The architecture supports comprehensive testing:
+### 1. CSRF Protection (`CsrfMiddleware`)
 
-### Unit Testing
-- Each component is independently testable
-- Type constraints can be tested in isolation
-- Route tree generation is deterministic
+**Architecture:**
+- Strategy pattern for different protection approaches
+- Cryptographically secure token generation
+- HMAC-signed cookies for stateless protection
+- PSR-16 cache integration for stateful protection
 
-### Integration Testing
-- Full request/response cycle testing
-- Security constraint validation
-- Performance regression testing
+**Components:**
+```
+CsrfMiddleware
+├── CsrfProtectionStrategyInterface
+├── SignedDoubleSubmitCookieStrategy
+├── SynchronizerTokenStrategy
+├── TokenGenerator
+└── TokenStorageInterface
+```
 
-### Security Testing
-- Input fuzzing against type constraints
-- Parameter pollution testing
-- URL generation validation
+**Flow:**
+1. Token generation using cryptographically secure random bytes
+2. HMAC signing for stateless validation
+3. Cookie-based token distribution
+4. Request validation with timing attack protection
 
-## Future Considerations
+### 2. Content Security Policy (`CspMiddleware`)
+
+**Architecture:**
+- Configurable policy directives
+- Automatic nonce generation
+- Report-only mode support
+- Secure defaults for modern applications
+
+**Features:**
+- Nonce generation for inline scripts/styles
+- Configurable policy directives
+- Report URI support
+- Automatic header injection
+
+### 3. CORS Protection (`CorsMiddleware`)
+
+**Architecture:**
+- Full CORS policy implementation
+- Preflight request handling
+- Origin validation with security-first defaults
+- Method and header validation
+
+**Flow:**
+1. Origin validation against allowed origins
+2. Preflight request handling for complex requests
+3. Method and header validation
+4. Credential handling with security considerations
+
+### 4. Honeypot Protection (`HoneypotMiddleware`)
+
+**Architecture:**
+- Hidden field detection
+- Timing analysis for bot detection
+- Rate limiting with exponential backoff
+- Comprehensive logging
+
+**Components:**
+```
+HoneypotMiddleware
+├── Field Detection
+├── Timing Analysis
+├── Rate Limiting
+└── Logging
+```
+
+## Route Processing
+
+### 1. Route Matching (`RouteMatchMiddleware`)
+
+**Responsibilities:**
+- Match incoming requests to defined routes
+- Extract and validate route parameters
+- Add route information to request attributes
+- Handle 404 and 405 responses
+
+**Flow:**
+1. Parse request method and URI
+2. Traverse route tree for matching
+3. Validate parameters against type constraints
+4. Add route data to request attributes
+
+### 2. Route Dispatch (`RouteDispatchMiddleware`)
+
+**Responsibilities:**
+- Execute matched route handlers
+- Support multiple handler types (closures, controllers, invokables)
+- Dependency injection integration
+- Error handling and response creation
+
+**Handler Types:**
+- Closures and callables
+- Controller@method strings
+- Invokable controllers
+- Array-based handlers
+
+## Middleware Stack
+
+### Implementation
+
+The middleware stack uses an immutable index-based approach for optimal performance:
+
+```php
+class MiddlewareStack implements RequestHandlerInterface
+{
+    private array $middlewares = [];
+    private RequestHandlerInterface $finalHandler;
+
+    public function handle(ServerRequestInterface $request): ResponseInterface
+    {
+        return $this->processMiddleware($request, 0);
+    }
+
+    protected function processMiddleware(ServerRequestInterface $request, int $index): ResponseInterface
+    {
+        if ($index >= count($this->middlewares)) {
+            return $this->finalHandler->handle($request);
+        }
+
+        $middleware = $this->middlewares[$index];
+        $nextHandler = new class($this, $index + 1) implements RequestHandlerInterface {
+            // Next handler implementation
+        };
+
+        return $middleware->process($request, $nextHandler);
+    }
+}
+```
+
+### Ordering Strategy
+
+Security middleware is ordered for optimal protection:
+
+1. **CORS** - Handle preflight requests first
+2. **CSP** - Add security headers early
+3. **Honeypot** - Detect bots before processing
+4. **CSRF** - Validate tokens before route matching
+5. **Route Match** - Match routes after security checks
+6. **Route Dispatch** - Execute handlers last
+
+## Performance Optimizations
+
+### 1. Route Tree Caching
+
+Routes are compiled into a tree structure that can be cached:
+
+```php
+// Generate cache
+$cacheData = $router->dump();
+file_put_contents('routes.cache', serialize($cacheData));
+
+// Load cache
+$router->load(unserialize(file_get_contents('routes.cache')));
+```
+
+### 2. Type Validation Optimization
+
+Type validation uses optimized algorithms:
+- Early validation failure
+- Cached validation results
+- Minimal memory allocation
+
+### 3. Middleware Stack Optimization
+
+- Immutable middleware execution
+- No array mutations during request processing
+- Efficient handler chaining
+
+## Error Handling
+
+### Exception Hierarchy
+
+```
+RouterException
+├── NotFoundException
+├── MethodNotAllowedException
+└── SecurityException
+    ├── CsrfException
+    └── SecurityException
+```
+
+### Error Response Strategy
+
+- Safe error messages that don't leak sensitive information
+- Appropriate HTTP status codes
+- Structured error responses
+- Comprehensive logging
+
+## Security Design Principles
+
+### 1. Defense in Depth
+
+Multiple layers of security protection:
+- Input validation at the router level
+- Security middleware for common attacks
+- Type safety throughout the application
+- Comprehensive error handling
+
+### 2. Fail-Safe Defaults
+
+- All route parameters require type constraints
+- Security middleware enabled by default
+- Strict CORS policies
+- Secure cookie configurations
+
+### 3. Principle of Least Privilege
+
+- Minimal required permissions
+- Explicit route definitions only
+- No dynamic code execution
+- Controlled parameter access
+
+## Integration Patterns
+
+### 1. PSR Standards Compliance
+
+- **PSR-7**: HTTP Message Interfaces
+- **PSR-15**: HTTP Server Request Handlers
+- **PSR-16**: Simple Cache Interface
+- **PSR-11**: Container Interface (optional)
+- **PSR-3**: Logger Interface
+
+### 2. Framework Integration
+
+The router can be integrated into any PSR-7/PSR-15 compatible framework:
+
+```php
+// Laravel integration example
+class RouterServiceProvider extends ServiceProvider
+{
+    public function register()
+    {
+        $this->app->singleton(Router::class, function ($app) {
+            $router = new Router();
+            // Configure routes
+            return $router;
+        });
+    }
+}
+```
+
+### 3. Dependency Injection
+
+Support for PSR-11 containers:
+
+```php
+$routeDispatchMiddleware = new RouteDispatchMiddleware($container);
+```
+
+## Testing Architecture
+
+### 1. Unit Testing
+
+- Isolated component testing
+- Mock-based testing for dependencies
+- Comprehensive coverage requirements
+- Security-focused test cases
+
+### 2. Integration Testing
+
+- End-to-end middleware testing
+- Security scenario testing
+- Performance benchmarking
+- Error condition testing
+
+### 3. Security Testing
+
+- CSRF attack simulation
+- XSS prevention testing
+- CORS policy validation
+- Honeypot effectiveness testing
+
+## Deployment Considerations
+
+### 1. Production Configuration
+
+- Environment-based configuration
+- Secure secret management
+- Performance monitoring
+- Error logging and alerting
+
+### 2. Caching Strategy
+
+- Route tree caching
+- Type validation caching
+- Security token caching
+- Response caching considerations
+
+### 3. Monitoring and Logging
+
+- Security event logging
+- Performance metrics
+- Error tracking
+- Audit trail maintenance
+
+## Future Architecture
 
 ### Planned Enhancements
 
-1. **Route Model Binding**: Automatic model resolution from route parameters
-2. **Route Caching**: More sophisticated caching strategies
-3. **OpenAPI Integration**: Automatic API documentation generation
-4. **Performance Monitoring**: Built-in performance metrics
+1. **GraphQL Support**: Native GraphQL route handling
+2. **WebSocket Integration**: Real-time communication support
+3. **Rate Limiting**: Advanced rate limiting middleware
+4. **API Versioning**: Built-in API versioning support
+5. **Metrics Collection**: Performance and security metrics
 
-### Backward Compatibility
+### Extension Points
 
-The architecture maintains strict backward compatibility:
-- New features are additive only
-- Existing APIs remain stable
-- Security enhancements are non-breaking
+The architecture provides extension points for:
+- Custom security strategies
+- Additional middleware components
+- Custom type validators
+- Framework-specific integrations
 
 ## Conclusion
 
-The dzentota Router architecture prioritizes security, performance, and maintainability. By integrating deeply with the TypedValue system and following AppSec principles, it provides a robust foundation for secure web applications while maintaining developer productivity and application performance. 
+The dzentota/router architecture provides a solid foundation for building secure, high-performance PHP applications. The comprehensive middleware suite, type-safe routing, and security-first design make it suitable for production use in security-critical environments.
+
+The modular design allows for easy extension and customization while maintaining the core security and performance guarantees that make the library reliable for enterprise applications. 

@@ -1,64 +1,145 @@
-## Fast and flexible security aware router.
+# dzentota/router
 
+A high-performance, security-first PHP router with comprehensive PSR-15 middleware suite.
 
-### Usage
-Usage of Router is as simple as:
+## Features
+
+- **High Performance**: Optimized route matching with tree-based algorithm
+- **Type Safety**: Strongly-typed route parameters with validation
+- **PSR-15 Compliant**: Full middleware support with PSR-15 interface
+- **Security First**: Built-in security middleware suite
+- **Production Ready**: Comprehensive error handling and logging
+- **Flexible**: Support for closures, controllers, and dependency injection
+
+## Security Middleware Suite
+
+The router includes a comprehensive security middleware suite designed to protect against common web vulnerabilities:
+
+### 🔒 CSRF Protection
+- Stateless and stateful protection strategies
+- Cryptographically secure token generation
+- HMAC-signed cookies for stateless protection
+- PSR-16 cache integration for stateful protection
+
+### 🛡️ Content Security Policy (CSP)
+- Comprehensive CSP headers with nonce generation
+- Configurable policy directives
+- Report-only mode support
+- Secure defaults for modern web applications
+
+### 🌐 CORS Protection
+- Full CORS policy implementation
+- Preflight request handling
+- Origin, method, and header validation
+- Credential support with security-first defaults
+
+### 🕷️ Honeypot Protection
+- Bot detection using hidden fields
+- Timing analysis for request patterns
+- Rate limiting with exponential backoff
+- Comprehensive logging and monitoring
+
+## Quick Start
+
+### Installation
+
+```bash
+composer require dzentota/router
+```
+
+### Basic Usage
 
 ```php
-// Fetch method and URI from somewhere
-$httpMethod = $_SERVER['REQUEST_METHOD'];
-$uri = $_SERVER['REQUEST_URI'];
+<?php
 
-// Strip query string (?foo=bar) and decode URI
-if (false !== $pos = strpos($uri, '?')) {
-    $uri = substr($uri, 0, $pos);
-}
-$uri = rawurldecode($uri);
+use dzentota\Router\Router;
+use dzentota\Router\Middleware\MiddlewareStack;
+use dzentota\Router\Middleware\RouteMatchMiddleware;
+use dzentota\Router\Middleware\RouteDispatchMiddleware;
+use Psr\Http\Message\ServerRequestInterface;
 
-$route = (new Router())
-    ->get('/user/{id}', 'UserController@show', ['id' => Id::class])
-    ->findRoute($httpMethod, $uri);
+// Create router
+$router = new Router();
+
+// Add routes with type constraints
+$router->get('/', function() {
+    return ['message' => 'Hello World'];
+});
+
+$router->get('/users/{id}', function(ServerRequestInterface $request) {
+    $id = $request->getAttribute('id');
+    return ['user' => ['id' => $id->toNative()]];
+}, ['id' => UserId::class]);
+
+$router->post('/users', function(ServerRequestInterface $request) {
+    $data = $request->getParsedBody();
+    return ['message' => 'User created', 'data' => $data];
+});
+
+// Create middleware stack
+$middlewareStack = MiddlewareStack::create(
+    $finalHandler,
+    new RouteMatchMiddleware($router),
+    new RouteDispatchMiddleware()
+);
+
+// Handle request
+$response = $middlewareStack->handle($request);
 ```
-The resolved `$route` will have the following structure (for `GET /user/42`):
-```
-array(4) {
-  ["route"]=>
-  string(10) "/user/{id}"
-  ["method"]=>
-  string(3) "get"
-  ["action"]=>
-  string(19) "UserController@show"
-  ["params"]=>
-  array(1) {
-    ["id"]=>
-    object(Id)#4 (1) {
-      ["value":protected]=>
-      string(2) "42"
-    }
-  }
-}
-```
 
-
-### Defining routes
-The routes are added by calling `addRoute()` on the Router instance:
+### Security-First Setup
 
 ```php
-$r->addRoute($method, string $route, string $action, array $constraints = [], ?string $name = null);
-```
-The $method is an HTTP method string for which a certain route should match. It is possible to specify multiple valid methods using an array:
-```php
-// These two calls
-$r->addRoute('GET', '/test', 'handler');
-$r->addRoute('POST', '/test', 'handler');
-// Are equivalent to this one call
-$r->addRoute(['GET', 'POST'], '/test', 'handler');
-```
-Router uses a syntax where `{foo}` specifies a placeholder with name `foo`. Every placeholder in the route must be typed. 
-From security perspective, there is no sense in accepting data from the user (via HTTP) without properly validating it against your domain.
+<?php
 
-Assume we have a list of users stored in the database and these users may be retrieved by the ID that is a autoincrement
-positive integer. In such a case it's a good idea to introduce a domain primitive - `ID`:
+use dzentota\Router\Router;
+use dzentota\Router\Middleware\MiddlewareStack;
+use dzentota\Router\Middleware\CorsMiddleware;
+use dzentota\Router\Middleware\CspMiddleware;
+use dzentota\Router\Middleware\CsrfMiddleware;
+use dzentota\Router\Middleware\HoneypotMiddleware;
+use dzentota\Router\Middleware\RouteMatchMiddleware;
+use dzentota\Router\Middleware\RouteDispatchMiddleware;
+use dzentota\Router\Middleware\Builder\CspMiddlewareBuilder;
+use dzentota\Router\Middleware\Builder\HoneypotMiddlewareBuilder;
+
+$router = new Router();
+
+// Add your routes here...
+
+// Using builders to configure middleware
+$cspMiddleware = CspMiddlewareBuilder::create()
+    ->allowScriptFrom('https://cdn.jsdelivr.net')
+    ->allowStyleFrom('https://fonts.googleapis.com')
+    ->withReportUri('https://example.com/csp-report')
+    ->withNonce(true)
+    ->build();
+
+$honeypotMiddleware = HoneypotMiddlewareBuilder::create()
+    ->withHoneypotFields(['website', 'url', 'email_confirm'])
+    ->withMinTimeThreshold(3)
+    ->withMaxSubmissionsPerMinute(10)
+    ->build();
+
+// Build secure middleware stack
+$middlewareStack = MiddlewareStack::create(
+    $finalHandler,
+    new CorsMiddleware([
+        'allowed_origins' => ['https://app.example.com'],
+        'allowed_methods' => ['GET', 'POST', 'PUT', 'DELETE'],
+        'allow_credentials' => true
+    ]),
+    $cspMiddleware,
+    $honeypotMiddleware,
+    new CsrfMiddleware($csrfStrategy),
+    new RouteMatchMiddleware($router),
+    new RouteDispatchMiddleware()
+);
+```
+
+## Type Safety
+
+The router enforces type safety through strongly-typed route parameters:
 
 ```php
 <?php
@@ -67,7 +148,7 @@ use dzentota\TypedValue\Typed;
 use dzentota\TypedValue\TypedValue;
 use dzentota\TypedValue\ValidationResult;
 
-class Id implements Typed
+class UserId implements Typed
 {
     use TypedValue;
 
@@ -75,149 +156,282 @@ class Id implements Typed
     {
         $result = new ValidationResult();
         if (!is_numeric($value) || $value <= 0) {
-            $result->addError('Bad ID');
+            $result->addError('Invalid user ID');
         }
         return $result;
     }
 }
+
+// Route with type constraint
+$router->get('/users/{id}', 'UserController@show', ['id' => UserId::class]);
 ```
 
-Now you can use ID as a custom type for placeholder in the route
+## Route Types
 
+### Basic Routes
 ```php
-$r->get('/user/{id}', 'UserController@show', ['id' => Id::class])
-```
+$router->get('/', function() {
+    return 'Hello World';
+});
 
-Params of the route enclosed in `{...?}` are considered optional, so that `/foo/{bar?}` will match both `/foo` and `/foo/bar`.
+$router->post('/users', function() {
+    return 'User created';
+});
+```
 
 ### Named Routes
-
-Routes can be given names for easy URL generation in templates and redirects:
-
 ```php
-// Define named routes
-$r->get('/users', 'UserController@index', [], 'users.index');
-$r->get('/users/{id}', 'UserController@show', ['id' => Id::class], 'users.show');
-$r->post('/users', 'UserController@create', [], 'users.create');
+$router->get('/users/{id}', 'UserController@show', ['id' => UserId::class], 'users.show');
+
+// Generate URL
+$url = $router->generateUrl('users.show', ['id' => 123]);
 ```
 
-### URL Generation
-
-Generate URLs from named routes using the `generateUrl()` method:
-
-```php
-// Simple routes without parameters
-$url = $r->generateUrl('users.index'); // Returns: /users
-
-// Routes with parameters
-$url = $r->generateUrl('users.show', ['id' => '42']); // Returns: /users/42
-
-// Routes with optional parameters
-$r->get('/posts/{category?}', 'PostController@index', [], 'posts.index');
-$url1 = $r->generateUrl('posts.index'); // Returns: /posts
-$url2 = $r->generateUrl('posts.index', ['category' => 'tech']); // Returns: /posts/tech
-```
-
-The router validates parameters against their constraints before generating URLs:
-
-```php
-// This will throw an exception if 'invalid' doesn't pass Id validation
-$url = $r->generateUrl('users.show', ['id' => 'invalid']);
-```
-
-### Route Inspection
-
-You can inspect and work with named routes:
-
-```php
-// Check if a named route exists
-if ($r->hasRoute('users.show')) {
-    // Route exists
-}
-
-// Get all named routes
-$namedRoutes = $r->getNamedRoutes();
-```
-
-### Shortcut methods for common request methods
-For the `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS` and `HEAD` request methods shortcut methods are available. 
-For example:
-```php
-$r->get('/get-route', 'get_handler');
-$r->post('/post-route', 'post_handler');
-
-// With names
-$r->get('/users', 'UserController@index', [], 'users.index');
-$r->post('/users', 'UserController@create', [], 'users.create');
-```
-Is equivalent to:
-```php
-$r->addRoute('GET', '/get-route', 'get_handler');
-$r->addRoute('POST', '/post-route', 'post_handler');
-
-// With names
-$r->addRoute('GET', '/users', 'UserController@index', [], 'users.index');
-$r->addRoute('POST', '/users', 'UserController@create', [], 'users.create');
-```
-Also, there is a virtual `ANY` method that matches any request method, so:
-
-```php
-$r->addRoute('ANY', '/route', 'get_handler');
-```
-Is equivalent to:
-```php
-$r->addRoute(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'], '/route', 'get_handler');
-```
 ### Route Groups
-Additionally, you can specify routes inside a group. All routes defined inside a group will have a common prefix.
-
-For example, defining your routes as:
-
 ```php
-$r->addGroup('/admin', function (Router $r) {
-    $r->addRoute('GET', '/do-something', 'handler');
-    $r->addRoute('GET', '/do-another-thing', 'handler');
-    $r->addRoute('GET', '/do-something-else', 'handler');
+$router->addGroup('/api/v1', function(Router $router) {
+    $router->get('/users', 'UserController@index');
+    $router->post('/users', 'UserController@store');
+    $router->get('/users/{id}', 'UserController@show', ['id' => UserId::class]);
 });
 ```
 
-Will have the same result as:
+## Middleware
+
+### Built-in Middleware
+
+- **RouteMatchMiddleware**: Matches requests to routes
+- **RouteDispatchMiddleware**: Executes route handlers
+- **CsrfMiddleware**: CSRF protection
+- **CspMiddleware**: Content Security Policy
+- **CorsMiddleware**: Cross-Origin Resource Sharing
+- **HoneypotMiddleware**: Bot detection
+
+### Builder Pattern for Middleware Configuration
+
+The router provides builder classes for easy middleware configuration:
+
+#### CORS Builder
 
 ```php
-$r->addRoute('GET', '/admin/do-something', 'handler');
-$r->addRoute('GET', '/admin/do-another-thing', 'handler');
-$r->addRoute('GET', '/admin/do-something-else', 'handler');
+use dzentota\Router\Middleware\Builder\CorsMiddlewareBuilder;
+
+$corsMiddleware = CorsMiddlewareBuilder::create()
+    ->withAllowedOrigins(['https://example.com'])
+    ->addAllowedOrigin('https://api.example.com')
+    ->withAllowedMethods(['GET', 'POST', 'PUT'])
+    ->withAllowedHeaders(['Content-Type', 'Authorization'])
+    ->allowCredentials(true)
+    ->withMaxAge(3600)
+    ->requireExactOrigin(true)
+    ->build();
 ```
 
-Named routes work with groups as well:
+#### CSP Builder
 
 ```php
-$r->addGroup('/admin', function (Router $r) {
-    $r->get('/users', 'AdminController@users', [], 'admin.users');
-    $r->get('/settings', 'AdminController@settings', [], 'admin.settings');
-});
+use dzentota\Router\Middleware\Builder\CspMiddlewareBuilder;
 
-// Generate URLs
-$usersUrl = $r->generateUrl('admin.users'); // Returns: /admin/users
-$settingsUrl = $r->generateUrl('admin.settings'); // Returns: /admin/settings
+$cspMiddleware = CspMiddlewareBuilder::create()
+    ->allowScriptFrom('https://cdn.jsdelivr.net')
+    ->allowStyleFrom('https://fonts.googleapis.com')
+    ->withReportUri('https://example.com/csp-report')
+    ->allowInlineScripts() // Be careful with this one
+    ->withNonce(true)
+    ->reportOnly(false)
+    ->build();
 ```
 
-### Caching
-You can dump and save routes using `dump()`, so later you can load them with `load()`
-Save routes:
+#### Honeypot Builder
+
 ```php
-file_put_contents('routes.php', sprintf('<?php return %s;',  var_export($r->dump(), true)));
+use dzentota\Router\Middleware\Builder\HoneypotMiddlewareBuilder;
+
+$honeypotMiddleware = HoneypotMiddlewareBuilder::create()
+    ->withHoneypotFields(['website', 'url', 'email_confirm'])
+    ->withMinTimeThreshold(3)
+    ->withMaxSubmissionsPerMinute(10)
+    ->withBlockOnViolation(true)
+    ->build();
 ```
-Restore routes:
+
+### Custom Middleware
+
 ```php
-$routes = require 'routes.php';
-$r->load($routes);
+<?php
+
+use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\ServerRequestInterface;
+use Psr\Http\Server\MiddlewareInterface;
+use Psr\Http\Server\RequestHandlerInterface;
+
+class LoggingMiddleware implements MiddlewareInterface
+{
+    public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
+    {
+        $start = microtime(true);
+        
+        $response = $handler->handle($request);
+        
+        $duration = microtime(true) - $start;
+        error_log("Request processed in {$duration}s");
+        
+        return $response;
+    }
+}
 ```
-### A Note on HEAD Requests
-The HTTP spec requires servers to support both GET and HEAD methods:
 
-> The methods GET and HEAD MUST be supported by all general-purpose servers
+## Error Handling
 
-To avoid forcing users to manually register HEAD routes for each resource we fallback to matching an available GET route for a given resource.
-The PHP web SAPI transparently removes the entity body from HEAD responses so this behavior has no effect on the vast majority of users. 
-Of course, you can always specify a custom handler for HEAD method 
+The router provides comprehensive error handling:
+
+```php
+try {
+    $route = $router->findRoute($method, $uri);
+} catch (NotFoundException $e) {
+    // Handle 404
+    return new NotFoundResponse();
+} catch (MethodNotAllowedException $e) {
+    // Handle 405
+    return new MethodNotAllowedResponse($e->getAllowedMethods());
+}
+```
+
+## Performance
+
+### Route Caching
+
+```php
+// Generate route cache
+$cacheData = $router->dump();
+file_put_contents('routes.cache', serialize($cacheData));
+
+// Load cached routes
+$router->load(unserialize(file_get_contents('routes.cache')));
+```
+
+## Testing
+
+```bash
+# Run all tests
+composer test
+
+# Run with coverage
+composer test -- --coverage-html coverage/
+```
+
+## Examples
+
+See the `examples/` directory for complete working examples:
+
+- `cli_demo.php` - Complete middleware stack demonstration
+- `middleware_usage.php` - Web-based middleware usage
+
+## Running Examples
+
+The library includes example applications to demonstrate various features and security middleware implementations.
+
+### Using PHP's Built-in Web Server
+
+You can quickly run the examples using PHP's built-in web server:
+
+```bash
+# Navigate to the project root
+cd /path/to/router
+
+# Start the built-in web server
+php -S localhost:8000 -t examples/
+
+# Access the middleware example
+# http://localhost:8000/middleware_usage.php
+
+# Access the API endpoint example
+# http://localhost:8000/middleware_usage.php/api/users/1
+```
+
+This allows you to test the router's features and security middleware without configuring a full web server.
+
+## Security Principles
+
+This library implements security principles outlined in the [AppSecManifesto](https://github.com/dzentota/AppSecManifesto). Below are the key principles followed:
+
+### Rule #0: Absolute Zero – Minimizing Attack Surface
+
+The router minimizes attack surface by:
+- Using strongly typed route parameters to prevent unexpected inputs
+- Implementing precise route matching algorithms to avoid routing ambiguity
+- Structuring the middleware stack to reject invalid requests early
+
+### Rule #1: The Lord of the Sinks – Context-Specific Escaping
+
+The library handles data output securely by:
+- Implementing proper context-specific escaping in CSP middleware
+- Using proper content-type headers to prevent content-type sniffing
+- Ensuring proper encoding of route parameters
+
+### Rule #2: The Parser's Prerogative (Least Computational Power Principle)
+
+Input validation follows strict parsing principles:
+- Route parameters are parsed and validated immediately at the routing boundary
+- Strong typing ensures data conforms to expected format before processing
+- Invalid inputs fail fast and explicitly
+
+### Rule #3: Forget-me-not – Preserving Data Validity
+
+The router maintains data validity through:
+- Using TypedValue objects to carry validation state throughout request processing
+- Ensuring validated data remains valid across the entire request lifecycle
+- Type safety preserves the validity guarantees established during parsing
+
+### Rule #5: The Principle of Pruning (Least Privilege)
+
+The middleware stack enforces least privilege by:
+- Implementing strict CORS policies that limit which origins can access resources
+- Providing fine-grained control over allowed HTTP methods and headers
+- Enforcing rigorous CSRF protection to prevent unauthorized actions
+
+### Rule #6: The Castle Doctrine (Defense in Depth)
+
+The library implements multiple security layers:
+- CORS protection for controlling cross-origin access
+- CSP headers to prevent XSS attacks
+- CSRF protection to prevent cross-site request forgery
+- Honeypot fields to detect and block automated attacks
+- Strict input validation through type constraints
+
+### Rule #10: The Gatekeeper's Gambit (Secure Session Management)
+
+Session security is enhanced through:
+- CSRF tokens with proper cryptographic properties
+- Secure cookie configurations (SameSite, Secure, HttpOnly)
+- Token generation with proper entropy
+
+### Rule #12: The Sentinel's Shield (API Security)
+
+API endpoints are secured through:
+- Strong input validation via typed route parameters
+- Protection against CSRF attacks
+- Proper rate limiting and throttling options
+- Configurable CORS policies to control API access
+
+## Contributing
+
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for more details.
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Security
+
+If you discover a security vulnerability, please report it privately to the maintainers. Do not disclose it publicly until it has been addressed.
+
+## Contributing
+
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details on our code of conduct and the process for submitting pull requests.
+
+## Support
+
+- **Issues**: [GitHub Issues](https://github.com/dzentota/router/issues)
+- **Documentation**: [GitHub Wiki](https://github.com/dzentota/router/wiki)
+- **Security**: webtota@gmail.com

@@ -9,13 +9,13 @@ use dzentota\Router\Exception\NotFoundException;
 use dzentota\TypedValue\Typed;
 
 /**
- * @method get(string $route, string $action, array $constraints = [], ?string $name = null)
- * @method post(string $route, string $action, array $constraints = [], ?string $name = null)
- * @method put(string $route, string $action, array $constraints = [], ?string $name = null)
- * @method delete(string $route, string $action, array $constraints = [], ?string $name = null)
- * @method patch(string $route, string $action, array $constraints = [], ?string $name = null)
- * @method head(string $route, string $action, array $constraints = [], ?string $name = null)
- * @method options(string $route, string $action, array $constraints = [], ?string $name = null)
+ * @method get(string $route, string|callable $action, array $constraints = [], ?string $name = null)
+ * @method post(string $route, string|callable $action, array $constraints = [], ?string $name = null)
+ * @method put(string $route, string|callable $action, array $constraints = [], ?string $name = null)
+ * @method delete(string $route, string|callable $action, array $constraints = [], ?string $name = null)
+ * @method patch(string $route, string|callable $action, array $constraints = [], ?string $name = null)
+ * @method head(string $route, string|callable $action, array $constraints = [], ?string $name = null)
+ * @method options(string $route, string|callable $action, array $constraints = [], ?string $name = null)
  */
 class Router
 {
@@ -30,13 +30,13 @@ class Router
      *
      * @param string|array $method
      * @param string $route
-     * @param string $action
+     * @param callable|string $action
      * @param array $constraints
      * @param string|null $name
      * @return Router
      * @throws \Exception
      */
-    public function addRoute($method, string $route, string $action, array $constraints = [], ?string $name = null): Router
+    public function addRoute($method, string $route, callable|string $action, array $constraints = [], ?string $name = null): Router
     {
         $method = (array)$method;
         $route = $this->currentGroupPrefix . $route;
@@ -55,6 +55,7 @@ class Router
         if ($name !== null) {
             $this->namedRoutes[$name] = [
                 'route' => $route,
+                'action' => $action,
                 'constraints' => $constraints
             ];
         }
@@ -235,7 +236,10 @@ class Router
             if (isset($node['exec'])) {
                 $node['exec']['method'] = array_merge($node['exec']['method'], $route['method']);
             } else {
-                $node['exec'] = $route;
+                $node['exec'] = [
+                    'route' => $route['route'],
+                    'method' => $route['method']
+                ];
             }
             if (isset($segment['name'])) {
                 $node['name'] = $segment['name'];
@@ -337,5 +341,15 @@ class Router
     public function hasRoute(string $name): bool
     {
         return isset($this->namedRoutes[$name]);
+    }
+
+    /**
+     * Get raw routes array
+     *
+     * @return array
+     */
+    public function getRawRoutes(): array
+    {
+        return $this->rawRoutes;
     }
 }

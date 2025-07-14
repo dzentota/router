@@ -26,7 +26,6 @@ class RouterTest extends TestCase
                             'method' => [
                                 'DELETE' => 'delete',
                             ],
-                            'constraints' => [],
                         ],
                     ],
                     'get' => [
@@ -36,7 +35,6 @@ class RouterTest extends TestCase
                             'method' => [
                                 'GET' => 'get',
                             ],
-                            'constraints' => [],
                         ],
                     ],
                     'head' => [
@@ -46,7 +44,6 @@ class RouterTest extends TestCase
                             'method' => [
                                 'HEAD' => 'head',
                             ],
-                            'constraints' => [],
                         ],
                     ],
                     'patch' => [
@@ -56,7 +53,6 @@ class RouterTest extends TestCase
                             'method' => [
                                 'PATCH' => 'patch',
                             ],
-                            'constraints' => [],
                         ],
                     ],
                     'post' => [
@@ -66,7 +62,6 @@ class RouterTest extends TestCase
                             'method' => [
                                 'POST' => 'post',
                             ],
-                            'constraints' => [],
                         ],
                     ],
                     'put' => [
@@ -76,7 +71,6 @@ class RouterTest extends TestCase
                             'method' => [
                                 'PUT' => 'put',
                             ],
-                            'constraints' => [],
                         ],
                     ],
                     'options' => [
@@ -86,7 +80,6 @@ class RouterTest extends TestCase
                             'method' => [
                                 'OPTIONS' => 'options',
                             ],
-                            'constraints' => [],
                         ],
                     ],
                 ],
@@ -142,7 +135,6 @@ class RouterTest extends TestCase
                             'method' => [
                                 'GET' => 'index',
                             ],
-                            'constraints' => [],
                         ],
                     ],
                     'module' => [
@@ -154,7 +146,6 @@ class RouterTest extends TestCase
                                 'method' => [
                                     'GET' => 'get',
                                 ],
-                                'constraints' => [],
                             ],
                         ],
                         'post' => [
@@ -164,7 +155,6 @@ class RouterTest extends TestCase
                                 'method' => [
                                     'POST' => 'post',
                                 ],
-                                'constraints' => [],
                             ],
                         ],
                         'put' => [
@@ -174,7 +164,6 @@ class RouterTest extends TestCase
                                 'method' => [
                                     'PUT' => 'put',
                                 ],
-                                'constraints' => [],
                             ],
                         ],
                         'delete' => [
@@ -184,7 +173,6 @@ class RouterTest extends TestCase
                                 'method' => [
                                     'DELETE' => 'delete',
                                 ],
-                                'constraints' => [],
                             ],
                         ],
                     ],
