@@ -214,7 +214,11 @@ testRoute(
     $middlewareStack, 
     'POST', 
     '/api/users', 
-    ['name' => 'John', 'email' => 'john@example.com'],
+    [
+        'name' => 'John',
+        'email' => 'john@example.com',
+        '_token' => $csrfSignature
+    ],
     ['__Host-csrf-token' => $csrfToken]
 );
 
@@ -237,4 +241,4 @@ echo "- CSRF protection (blocks requests without valid tokens)\n";
 echo "- Honeypot protection (blocks requests with filled honeypot fields)\n";
 echo "- CORS headers being added to responses\n";
 echo "- CSP headers being added to responses\n";
-echo "- Proper error handling (404 for non-existent routes)\n"; 
+echo "- Proper error handling (404 for non-existent routes)\n";

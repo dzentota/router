@@ -18,7 +18,7 @@ class ArrayCache implements CacheInterface
     /**
      * Get value from cache
      */
-    public function get($key, $default = null)
+    public function get(string $key, mixed $default = null): mixed
     {
         if (!$this->has($key)) {
             return $default;
@@ -30,11 +30,14 @@ class ArrayCache implements CacheInterface
     /**
      * Set value in cache
      */
-    public function set($key, $value, $ttl = null): bool
+    public function set(string $key, mixed $value, null|int|\DateInterval $ttl = null): bool
     {
         $this->cache[$key] = $value;
         
         if ($ttl !== null) {
+            if ($ttl instanceof \DateInterval) {
+                $ttl = (new \DateTime())->add($ttl)->getTimestamp() - time();
+            }
             $this->expiry[$key] = time() + $ttl;
         }
         
@@ -44,7 +47,7 @@ class ArrayCache implements CacheInterface
     /**
      * Delete value from cache
      */
-    public function delete($key): bool
+    public function delete(string $key): bool
     {
         unset($this->cache[$key], $this->expiry[$key]);
         return true;
@@ -63,7 +66,7 @@ class ArrayCache implements CacheInterface
     /**
      * Get multiple values
      */
-    public function getMultiple($keys, $default = null): iterable
+    public function getMultiple(iterable $keys, mixed $default = null): iterable
     {
         $result = [];
         foreach ($keys as $key) {
@@ -75,7 +78,7 @@ class ArrayCache implements CacheInterface
     /**
      * Set multiple values
      */
-    public function setMultiple($values, $ttl = null): bool
+    public function setMultiple(iterable $values, null|int|\DateInterval $ttl = null): bool
     {
         foreach ($values as $key => $value) {
             $this->set($key, $value, $ttl);
@@ -86,7 +89,7 @@ class ArrayCache implements CacheInterface
     /**
      * Delete multiple values
      */
-    public function deleteMultiple($keys): bool
+    public function deleteMultiple(iterable $keys): bool
     {
         foreach ($keys as $key) {
             $this->delete($key);
@@ -97,7 +100,7 @@ class ArrayCache implements CacheInterface
     /**
      * Check if key exists and is not expired
      */
-    public function has($key): bool
+    public function has(string $key): bool
     {
         // Check if key exists
         if (!array_key_exists($key, $this->cache)) {
@@ -112,4 +115,4 @@ class ArrayCache implements CacheInterface
         
         return true;
     }
-} 
+}
