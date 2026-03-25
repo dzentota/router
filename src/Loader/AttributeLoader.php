@@ -84,8 +84,13 @@ class AttributeLoader
      */
     public function loadFromDirectory(string $directory): void
     {
+        $realDir = realpath($directory);
+        if ($realDir === false || !is_dir($realDir)) {
+            throw new \InvalidArgumentException("AttributeLoader: directory not found: {$directory}");
+        }
+
         $iterator = new \RecursiveIteratorIterator(
-            new \RecursiveDirectoryIterator($directory, \FilesystemIterator::SKIP_DOTS)
+            new \RecursiveDirectoryIterator($realDir, \FilesystemIterator::SKIP_DOTS)
         );
 
         foreach ($iterator as $file) {
@@ -93,7 +98,13 @@ class AttributeLoader
                 continue;
             }
 
-            require_once $file->getPathname();
+            // Guard against symlinks escaping the target directory.
+            $realFile = $file->getRealPath();
+            if ($realFile === false || !str_starts_with($realFile, $realDir . DIRECTORY_SEPARATOR)) {
+                continue;
+            }
+
+            require_once $realFile;
 
             foreach (get_declared_classes() as $declaredClass) {
                 try {
@@ -102,7 +113,7 @@ class AttributeLoader
                     continue;
                 }
 
-                if ($ref->getFileName() !== $file->getPathname()) {
+                if ($ref->getFileName() !== $realFile) {
                     continue;
                 }
 

@@ -92,7 +92,14 @@ class Router
         // Eagerly validate the pattern (detects empty/duplicate param names immediately).
         $this->parseUri($route);
 
-        $routeObj = new Route($route, $methodsMap, $action, $this);
+        $routeObj = new Route(
+            $route,
+            $methodsMap,
+            $action,
+            function (Route $r, string $n, ?string $o): void {
+                $this->handleRouteName($r, $n, $o);
+            },
+        );
 
         if (!empty($constraints)) {
             $routeObj->where($constraints);
@@ -106,7 +113,14 @@ class Router
         if ($name !== null) {
             $routeObj->name($name);
         } elseif ($this->autoNaming && count($methodsMap) === 1) {
-            $routeObj->name($this->generateAutoName($route, array_key_first($methodsMap)));
+            $autoName = $this->generateAutoName($route, array_key_first($methodsMap));
+            if (isset($this->namedRoutes[$autoName])) {
+                throw new InvalidRouteException(
+                    "Auto-name '{$autoName}' is already taken by '{$this->namedRoutes[$autoName]->getPattern()}'. "
+                    . "Assign an explicit name to resolve the conflict."
+                );
+            }
+            $routeObj->name($autoName);
         }
 
         return $routeObj;
@@ -144,6 +158,12 @@ class Router
      */
     public function resource(string $prefix, string $controller, array $idConstraint = []): self
     {
+        if (empty($idConstraint)) {
+            throw new InvalidConstraintException(
+                "resource('{$prefix}') requires a Typed constraint for the {id} parameter, "
+                . "e.g. ['id' => YourIdClass::class]."
+            );
+        }
         $np = $this->resourceNamePrefix($this->currentGroupPrefix . $prefix);
 
         $this->addRoute('GET',              $prefix,              [$controller, 'index'],   [],           $np . '.index');
@@ -170,6 +190,12 @@ class Router
      */
     public function apiResource(string $prefix, string $controller, array $idConstraint = []): self
     {
+        if (empty($idConstraint)) {
+            throw new InvalidConstraintException(
+                "apiResource('{$prefix}') requires a Typed constraint for the {id} parameter, "
+                . "e.g. ['id' => YourIdClass::class]."
+            );
+        }
         $np = $this->resourceNamePrefix($this->currentGroupPrefix . $prefix);
 
         $this->addRoute('GET',             $prefix,           [$controller, 'index'],   [],            $np . '.index');
@@ -258,9 +284,11 @@ class Router
             throw new NotFoundException('Route for uri: ' . $uri . ' was not found');
         }
 
-        // Apply defaults for optional parameters absent from the URI.
+        // Apply defaults for optional parameters absent from the URI (per-method lookup).
         if (!empty($node['exec']['defaults'])) {
-            foreach ($node['exec']['defaults'] as $param => $default) {
+            $methodDefaults = $node['exec']['defaults'][$method]
+                ?? ($method === 'HEAD' ? ($node['exec']['defaults']['GET'] ?? []) : []);
+            foreach ($methodDefaults as $param => $default) {
                 if (!array_key_exists($param, $params)) {
                     $params[$param] = $default;
                 }
@@ -382,12 +410,16 @@ class Router
     // -------------------------------------------------------------------------
 
     /**
-     * Look up the name registered for a given route pattern in O(1).
-     * Returns null when the pattern has no associated name.
+     * Look up the name registered for a given route pattern + HTTP method in O(1).
+     * Returns null when no name is registered for that combination.
+     *
+     * Passing the HTTP method is required so that routes sharing the same URI
+     * pattern but registered under different names (e.g. resource routes) resolve
+     * correctly (e.g. GET /posts/{id} → 'posts.show', DELETE /posts/{id} → 'posts.destroy').
      */
-    public function findNameForRoute(string $routePattern): ?string
+    public function findNameForRoute(string $routePattern, string $method): ?string
     {
-        return $this->routeNameIndex[$routePattern] ?? null;
+        return $this->routeNameIndex[$routePattern . ':' . strtoupper($method)] ?? null;
     }
 
     /**
@@ -501,24 +533,29 @@ class Router
     }
 
     // -------------------------------------------------------------------------
-    // Internal helpers called by Route
+    // Private helpers called via closure injected into Route
     // -------------------------------------------------------------------------
 
     /**
      * Register (or rename) a route name in the router's internal indexes.
      *
-     * Called by {@see Route::name()}. Marked with a leading underscore to signal
-     * that it is internal infrastructure; external code should use Route::name().
-     *
-     * @internal
+     * Called via the closure passed to the Route constructor.
+     * Uses a compound `pattern:METHOD` key in routeNameIndex so that routes
+     * sharing the same URI pattern but different HTTP methods resolve to the
+     * correct name (e.g. resource routes).
      */
-    public function _registerRouteName(Route $route, string $name, ?string $oldName): void
+    private function handleRouteName(Route $route, string $name, ?string $oldName): void
     {
         if ($oldName !== null) {
-            unset($this->namedRoutes[$oldName], $this->routeNameIndex[$route->getPattern()]);
+            unset($this->namedRoutes[$oldName]);
+            foreach (array_keys($route->getMethodMap()) as $m) {
+                unset($this->routeNameIndex[$route->getPattern() . ':' . $m]);
+            }
         }
-        $this->namedRoutes[$name]                  = $route;
-        $this->routeNameIndex[$route->getPattern()] = $name;
+        $this->namedRoutes[$name] = $route;
+        foreach (array_keys($route->getMethodMap()) as $m) {
+            $this->routeNameIndex[$route->getPattern() . ':' . $m] = $name;
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -616,6 +653,12 @@ class Router
             if (isset($node['exec'])) {
                 // Same pattern registered again with different methods — merge.
                 $node['exec']['method'] = array_merge($node['exec']['method'], $route->getMethodMap());
+                // Store defaults per-method so GET /foo and POST /foo can have independent defaults.
+                if (!empty($route->getDefaults())) {
+                    foreach (array_keys($route->getMethodMap()) as $m) {
+                        $node['exec']['defaults'][$m] = $route->getDefaults();
+                    }
+                }
             } else {
                 $node['exec'] = [
                     'route'  => $route->getPattern(),
@@ -624,7 +667,9 @@ class Router
                 // Only store defaults in the tree when present, to preserve
                 // backward compatibility with tests that compare dump() output.
                 if (!empty($route->getDefaults())) {
-                    $node['exec']['defaults'] = $route->getDefaults();
+                    foreach (array_keys($route->getMethodMap()) as $m) {
+                        $node['exec']['defaults'][$m] = $route->getDefaults();
+                    }
                 }
             }
 

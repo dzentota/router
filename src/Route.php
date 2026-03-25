@@ -8,7 +8,7 @@ use dzentota\Router\Exception\InvalidConstraintException;
 use dzentota\TypedValue\Typed;
 
 /**
- * Represents a single route definition with its pattern, method map, action, and metadata.
+ * Represents a single route definition
  *
  * Provides a fluent interface for setting constraints, defaults, name, and tags after
  * the route has been registered with the router.
@@ -23,16 +23,17 @@ class Route
     private array $tags = [];
 
     /**
-     * @param string  $pattern   The URI pattern (e.g. '/users/{id}').
-     * @param array   $methodMap Map of HTTP-method → action (e.g. ['GET' => 'handler']).
-     * @param mixed   $action    The handler (callable, 'Class@method', 'Class::method', or [class, method]).
-     * @param Router  $router    Back-reference used by name() to register the name immediately.
+     * @param string   $pattern      The URI pattern (e.g. '/users/{id}').
+     * @param array    $methodMap    Map of HTTP-method → action (e.g. ['GET' => 'handler']).
+     * @param mixed    $action       The handler (callable, 'Class@method', 'Class::method', or [class, method]).
+     * @param \Closure $nameRegistrar Callback injected by Router to update the named-route indexes.
+     *                               Signature: (Route $route, string $name, ?string $oldName): void
      */
     public function __construct(
-        private readonly string $pattern,
-        private readonly array  $methodMap,
-        private readonly mixed  $action,
-        private readonly Router $router,
+        private readonly string   $pattern,
+        private readonly array    $methodMap,
+        private readonly mixed    $action,
+        private readonly \Closure $nameRegistrar,
     ) {}
 
     // -------------------------------------------------------------------------
@@ -71,7 +72,7 @@ class Route
     {
         $oldName    = $this->name;
         $this->name = $name;
-        $this->router->_registerRouteName($this, $name, $oldName);
+        ($this->nameRegistrar)($this, $name, $oldName);
         return $this;
     }
 

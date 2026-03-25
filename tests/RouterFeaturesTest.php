@@ -65,7 +65,7 @@ class RouterFeaturesTest extends TestCase
           ->name('users.show');
 
         self::assertTrue($r->hasRoute('users.show'));
-        self::assertSame('users.show', $r->findNameForRoute('/users/{id}'));
+        self::assertSame('users.show', $r->findNameForRoute('/users/{id}', 'GET'));
     }
 
     public function testFluentNameCanBeCalledAfterWhere(): void
@@ -145,6 +145,28 @@ class RouterFeaturesTest extends TestCase
         self::assertSame('/posts/42/edit',   $r->generateUrl('posts.edit',    ['id' => '42']));
         self::assertSame('/posts/42',        $r->generateUrl('posts.update',  ['id' => '42']));
         self::assertSame('/posts/42',        $r->generateUrl('posts.destroy', ['id' => '42']));
+
+        // Compound-key reverse lookup: same URI pattern resolves to correct name per method.
+        self::assertSame('posts.show',    $r->findNameForRoute('/posts/{id}', 'GET'));
+        self::assertSame('posts.update',  $r->findNameForRoute('/posts/{id}', 'PUT'));
+        self::assertSame('posts.update',  $r->findNameForRoute('/posts/{id}', 'PATCH'));
+        self::assertSame('posts.destroy', $r->findNameForRoute('/posts/{id}', 'DELETE'));
+    }
+
+    public function testResourceRejectsEmptyIdConstraint(): void
+    {
+        $this->expectException(\dzentota\Router\Exception\InvalidConstraintException::class);
+
+        $r = new Router();
+        $r->resource('/posts', PostController::class);  // no idConstraint
+    }
+
+    public function testApiResourceRejectsEmptyIdConstraint(): void
+    {
+        $this->expectException(\dzentota\Router\Exception\InvalidConstraintException::class);
+
+        $r = new Router();
+        $r->apiResource('/comments', PostController::class);
     }
 
     public function testResourceAcceptsGetAndPatchForUpdate(): void
@@ -204,6 +226,23 @@ class RouterFeaturesTest extends TestCase
 
         $result = $r->findRoute('GET', '/items');
         self::assertSame(1, $result['params']['page']);
+    }
+
+    public function testDefaultsMergedAcrossMethodsOnSamePattern(): void
+    {
+        $r = new Router();
+        $r->get('/things/{page?}', 'ThingList')
+          ->where(['page' => RouteId::class])
+          ->defaults(['page' => 1]);
+        $r->post('/things/{page?}', 'ThingStore')
+          ->where(['page' => RouteId::class])
+          ->defaults(['page' => 99]);
+
+        $get  = $r->findRoute('GET',  '/things');
+        $post = $r->findRoute('POST', '/things');
+
+        self::assertSame(1,  $get['params']['page']);
+        self::assertSame(99, $post['params']['page']);
     }
 
     public function testDefaultsNotAppliedWhenParamPresent(): void

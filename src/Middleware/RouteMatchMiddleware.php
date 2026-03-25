@@ -142,9 +142,9 @@ class RouteMatchMiddleware implements MiddlewareInterface
      */
     private function findRouteName(array $routeData): ?string
     {
-        if (!isset($routeData['route'])) {
+        if (!isset($routeData['route'], $routeData['method'])) {
             return null;
         }
-        return $this->router->findNameForRoute($routeData['route']);
+        return $this->router->findNameForRoute($routeData['route'], $routeData['method']);
     }
 } 

@@ -483,8 +483,8 @@ class RouterTest extends TestCase
         $r = new Router();
         $r->get('/users/{id}', 'UserShow', ['id' => Id::class], 'users.show');
 
-        self::assertSame('users.show', $r->findNameForRoute('/users/{id}'));
-        self::assertNull($r->findNameForRoute('/nonexistent'));
+        self::assertSame('users.show', $r->findNameForRoute('/users/{id}', 'GET'));
+        self::assertNull($r->findNameForRoute('/nonexistent', 'GET'));
     }
 }
 

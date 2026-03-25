@@ -203,9 +203,9 @@ $autoRouter->get('/dashboard', 'Dashboard');
 $autoRouter->get('/admin/users/{id}', 'AdminUserShow', ['id' => DemoUserId::class]);
 $autoRouter->get('/explicit', 'Explicit', [], 'explicit.route'); // explicit wins
 
-echo "✓ /dashboard → name: '" . ($autoRouter->findNameForRoute('/dashboard') ?? 'n/a') . "'\n";
-echo "✓ /admin/users/{id} → name: '" . ($autoRouter->findNameForRoute('/admin/users/{id}') ?? 'n/a') . "'\n";
-echo "✓ /explicit → name: '" . ($autoRouter->findNameForRoute('/explicit') ?? 'n/a') . "'\n";
+echo "✓ /dashboard → name: '" . ($autoRouter->findNameForRoute('/dashboard', 'GET') ?? 'n/a') . "'\n";
+echo "✓ /admin/users/{id} → name: '" . ($autoRouter->findNameForRoute('/admin/users/{id}', 'GET') ?? 'n/a') . "'\n";
+echo "✓ /explicit → name: '" . ($autoRouter->findNameForRoute('/explicit', 'GET') ?? 'n/a') . "'\n";
 
 echo "\n";
 

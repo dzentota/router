@@ -305,7 +305,7 @@ class RouteDispatchMiddleware implements MiddlewareInterface
         }
         
         if (is_array($content) || is_object($content)) {
-            $json = json_encode($content);
+            $json = json_encode($content, JSON_THROW_ON_ERROR);
             $response->getBody()->write($json);
             return $response->withHeader('Content-Type', 'application/json');
         }

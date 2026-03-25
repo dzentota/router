@@ -47,8 +47,10 @@ class UrlSigner
         private readonly string $signingKey,
         private readonly int $defaultTtl = 3600,
     ) {
-        if (strlen($signingKey) < 16) {
-            throw new \InvalidArgumentException('UrlSigner: signing key must be at least 16 characters');
+        if (strlen($signingKey) < 32) {
+            throw new \InvalidArgumentException(
+                'UrlSigner: signing key must be at least 32 characters (256 bits recommended)'
+            );
         }
     }
 
@@ -68,10 +70,11 @@ class UrlSigner
     {
         $url     = $this->router->generateUrl($name, $parameters);
         $expires = time() + ($ttl ?? $this->defaultTtl);
-        $base    = $url . '?expires=' . $expires;
+        // Use http_build_query for consistent encoding with verify()
+        $base    = $url . '?' . http_build_query(['expires' => $expires]);
         $sig     = hash_hmac('sha256', $base, $this->signingKey);
 
-        return $base . '&signature=' . $sig;
+        return $base . '&' . http_build_query(['signature' => $sig]);
     }
 
     /**
