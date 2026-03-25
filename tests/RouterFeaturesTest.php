@@ -101,9 +101,11 @@ class RouterFeaturesTest extends TestCase
 
         self::assertSame(['id' => 1], $route->getDefaults());
 
-        // When the optional segment is absent, the default should be injected.
+        // When the optional segment is absent, the default is parsed through its
+        // Typed constraint — the handler receives a RouteId object, not a raw int.
         $result = $r->findRoute('GET', '/posts');
-        self::assertSame(1, $result['params']['id']);
+        self::assertInstanceOf(RouteId::class, $result['params']['id']);
+        self::assertSame('1', $result['params']['id']->toNative());
     }
 
     public function testFluentTag(): void
@@ -225,7 +227,9 @@ class RouterFeaturesTest extends TestCase
           ->name('items.index');
 
         $result = $r->findRoute('GET', '/items');
-        self::assertSame(1, $result['params']['page']);
+        // Default is parsed through RouteId — always a Typed object, never a raw value.
+        self::assertInstanceOf(RouteId::class, $result['params']['page']);
+        self::assertSame('1', $result['params']['page']->toNative());
     }
 
     public function testDefaultsMergedAcrossMethodsOnSamePattern(): void
@@ -241,8 +245,34 @@ class RouterFeaturesTest extends TestCase
         $get  = $r->findRoute('GET',  '/things');
         $post = $r->findRoute('POST', '/things');
 
-        self::assertSame(1,  $get['params']['page']);
-        self::assertSame(99, $post['params']['page']);
+        // Each method gets its own default, parsed through the constraint.
+        self::assertInstanceOf(RouteId::class, $get['params']['page']);
+        self::assertSame('1',  $get['params']['page']->toNative());
+        self::assertInstanceOf(RouteId::class, $post['params']['page']);
+        self::assertSame('99', $post['params']['page']->toNative());
+    }
+
+    public function testDefaultWithoutConstraintThrows(): void
+    {
+        $this->expectException(\dzentota\Router\Exception\InvalidConstraintException::class);
+        $this->expectExceptionMessage("Default for 'page' on '/items/{page?}' has no Typed constraint");
+
+        $r = new Router();
+        $r->get('/items/{page?}', 'ItemList')
+          ->defaults(['page' => 1]); // no ->where() — must throw at tree-build time
+        $r->findRoute('GET', '/items'); // triggers parseRoutes()
+    }
+
+    public function testDefaultWithInvalidValueThrows(): void
+    {
+        $this->expectException(\dzentota\Router\Exception\InvalidRouteException::class);
+        $this->expectExceptionMessage("Default value 'bad' for 'page'");
+
+        $r = new Router();
+        $r->get('/items/{page?}', 'ItemList')
+          ->where(['page' => RouteId::class])
+          ->defaults(['page' => 'bad']); // 'bad' is not a valid RouteId
+        $r->findRoute('GET', '/items'); // triggers parseRoutes()
     }
 
     public function testDefaultsNotAppliedWhenParamPresent(): void
@@ -254,7 +284,6 @@ class RouterFeaturesTest extends TestCase
           ->name('items.index');
 
         $result = $r->findRoute('GET', '/items/3');
-        // Should be a parsed RouteId object, not the default integer
         self::assertInstanceOf(RouteId::class, $result['params']['page']);
         self::assertSame('3', $result['params']['page']->toNative());
     }

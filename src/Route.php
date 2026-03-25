@@ -79,11 +79,16 @@ class Route
     /**
      * Set default values for optional route parameters.
      *
-     * Defaults are applied when an optional parameter is absent from the request URI.
-     * They are developer-controlled values that bypass TypedValue parsing and are set
-     * directly as request attributes.
+     * Defaults are used when an optional parameter is absent from the request URI.
+     * Each non-null default is parsed through its corresponding Typed constraint
+     * (set via {@see where()}) before being passed to the handler — the handler
+     * always receives a {@see Typed} object, never a raw PHP value.
      *
-     * @param array<string, mixed> $defaults Parameter-name → default value.
+     * Constraints MUST be registered with {@see where()} for every non-null default.
+     * Invalid default values (rejected by the constraint) are caught at tree-build
+     * time (first call to {@see Router::findRoute()} or {@see Router::dump()}).
+     *
+     * @param array<string, mixed> $defaults  Parameter-name → default value (or null).
      */
     public function defaults(array $defaults): self
     {

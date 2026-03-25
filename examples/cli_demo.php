@@ -157,7 +157,7 @@ $router->get('/posts/{page?}', function (ServerRequestInterface $request) {
 ->tag('api');
 
 echo "✓ Named route '/users/{id}' → " . $router->generateUrl('users.show', ['id' => '42']) . "\n";
-echo "✓ Default page on '/posts'  → page=" . $router->findRoute('GET', '/posts')['params']['page'] . "\n";
+echo "✓ Default page on '/posts'  → page=" . $router->findRoute('GET', '/posts')['params']['page']->toNative() . "\n";
 echo "✓ Explicit page on '/posts/3' → page=" . $router->findRoute('GET', '/posts/3')['params']['page']->toNative() . "\n";
 
 echo "\n";

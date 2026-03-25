@@ -284,13 +284,18 @@ class Router
             throw new NotFoundException('Route for uri: ' . $uri . ' was not found');
         }
 
-        // Apply defaults for optional parameters absent from the URI (per-method lookup).
+        // Apply defaults for optional parameters absent from the URI.
+        // Defaults are parsed through their Typed constraints — handlers always receive
+        // a Typed object, never a raw PHP value, regardless of whether the value came
+        // from the URL or from a developer-defined default.
         if (!empty($node['exec']['defaults'])) {
             $methodDefaults = $node['exec']['defaults'][$method]
                 ?? ($method === 'HEAD' ? ($node['exec']['defaults']['GET'] ?? []) : []);
-            foreach ($methodDefaults as $param => $default) {
+            foreach ($methodDefaults as $param => $spec) {
                 if (!array_key_exists($param, $params)) {
-                    $params[$param] = $default;
+                    $params[$param] = $spec['value'] === null
+                        ? null
+                        : $this->parseValue($param, (string)$spec['value'], $spec['constraint']);
                 }
             }
         }
@@ -653,10 +658,10 @@ class Router
             if (isset($node['exec'])) {
                 // Same pattern registered again with different methods — merge.
                 $node['exec']['method'] = array_merge($node['exec']['method'], $route->getMethodMap());
-                // Store defaults per-method so GET /foo and POST /foo can have independent defaults.
                 if (!empty($route->getDefaults())) {
+                    $defaultSpecs = $this->buildDefaultSpecs($route);
                     foreach (array_keys($route->getMethodMap()) as $m) {
-                        $node['exec']['defaults'][$m] = $route->getDefaults();
+                        $node['exec']['defaults'][$m] = $defaultSpecs;
                     }
                 }
             } else {
@@ -664,11 +669,10 @@ class Router
                     'route'  => $route->getPattern(),
                     'method' => $route->getMethodMap(),
                 ];
-                // Only store defaults in the tree when present, to preserve
-                // backward compatibility with tests that compare dump() output.
                 if (!empty($route->getDefaults())) {
+                    $defaultSpecs = $this->buildDefaultSpecs($route);
                     foreach (array_keys($route->getMethodMap()) as $m) {
-                        $node['exec']['defaults'][$m] = $route->getDefaults();
+                        $node['exec']['defaults'][$m] = $defaultSpecs;
                     }
                 }
             }
@@ -678,6 +682,53 @@ class Router
             }
         }
         return $tree;
+    }
+
+    /**
+     * Build the default-spec array for a route's defaults, validating each value
+     * against its Typed constraint at tree-build time.
+     *
+     * Each entry is: `['value' => mixed, 'constraint' => class-string<Typed>|null]`
+     *
+     * Rules:
+     * - A non-null default without a corresponding constraint throws immediately.
+     * - A non-null default that fails its constraint throws immediately, catching
+     *   developer errors at startup rather than at the first matching request.
+     * - A null default is stored as-is (represents "explicitly absent").
+     *
+     * @return array<string, array{value: mixed, constraint: class-string<Typed>|null}>
+     *
+     * @throws InvalidConstraintException when a default has no Typed constraint.
+     * @throws InvalidRouteException      when a default value is rejected by its constraint.
+     */
+    private function buildDefaultSpecs(Route $route): array
+    {
+        $constraints = $route->getConstraints();
+        $specs       = [];
+
+        foreach ($route->getDefaults() as $param => $value) {
+            $constraint = $constraints[$param] ?? null;
+
+            if ($value !== null) {
+                if ($constraint === null) {
+                    throw new InvalidConstraintException(
+                        "Default for '{$param}' on '{$route->getPattern()}' has no Typed constraint. "
+                        . "Add ->where(['{$param}' => YourType::class]) to the route."
+                    );
+                }
+                // Validate the default value at tree-build time (startup), not per-request.
+                if (!$constraint::tryParse((string)$value, $validated) || $validated === null) {
+                    throw new InvalidRouteException(
+                        "Default value '{$value}' for '{$param}' on '{$route->getPattern()}' "
+                        . "is rejected by constraint {$constraint}."
+                    );
+                }
+            }
+
+            $specs[$param] = ['value' => $value, 'constraint' => $constraint];
+        }
+
+        return $specs;
     }
 
     /**
