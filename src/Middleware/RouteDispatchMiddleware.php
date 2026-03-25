@@ -34,33 +34,60 @@ class RouteDispatchMiddleware implements MiddlewareInterface
     }
 
     /**
-     * Process request and dispatch to route handler
+     * Process request and dispatch to route handler.
+     *
+     * If per-route middleware was registered (via {@see Route::middleware()} or
+     * {@see Router::addGroup()} middleware), it runs as a sub-stack *before* the
+     * actual handler, after route matching has already occurred.
      */
     public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
     {
-        // Check if route was matched
         if (!$request->getAttribute('route_matched', false)) {
             return $this->handleUnmatched($request, $handler);
         }
 
-        // Get route handler from request attributes
         $routeHandler = $request->getAttribute('route_handler');
-        
         if ($routeHandler === null) {
             return $this->createErrorResponse(500, 'Route handler not found');
         }
 
-        try {
-            // Resolve and execute the handler
-            $response = $this->executeHandler($routeHandler, $request);
+        // If per-route/group middleware is present, build a sub-stack that runs
+        // it before executing the actual handler.
+        $routeMiddleware = $request->getAttribute('route_middleware', []);
+        if (!empty($routeMiddleware)) {
+            $dispatcher  = $this;
+            $outerNext   = $handler;
+            $innerHandler = new class($dispatcher, $outerNext) implements RequestHandlerInterface {
+                public function __construct(
+                    private readonly RouteDispatchMiddleware $dispatcher,
+                    private readonly RequestHandlerInterface $next,
+                ) {}
+                public function handle(ServerRequestInterface $request): ResponseInterface
+                {
+                    return $this->dispatcher->runRouteHandler($request, $this->next);
+                }
+            };
+            return MiddlewareStack::create($innerHandler, ...$routeMiddleware)->handle($request);
+        }
 
-            // Ensure we return a valid ResponseInterface
+        return $this->runRouteHandler($request, $handler);
+    }
+
+    /**
+     * Execute the matched route handler.
+     *
+     * Extracted from process() so the route-middleware sub-stack can call it
+     * as its terminal handler.
+     */
+    public function runRouteHandler(ServerRequestInterface $request, RequestHandlerInterface $next): ResponseInterface
+    {
+        $routeHandler = $request->getAttribute('route_handler');
+        try {
+            $response = $this->executeHandler($routeHandler, $request);
             if (!$response instanceof ResponseInterface) {
                 $response = $this->createResponseFromContent($response);
             }
-
             return $response;
-
         } catch (\InvalidArgumentException $e) {
             $this->logger->error('Route dispatch configuration error: ' . $e->getMessage());
             return $this->createErrorResponse(500, 'Internal server error');

@@ -349,3 +349,58 @@ demoRequest($middlewareStack, 'GET',  '/nonexistent');
 
 echo "\n✅ Demo complete!\n";
 
+// ===========================================================================
+// 10. Simple dispatch API (global / group / per-route middleware)
+// ===========================================================================
+
+echo "--- 10. Simple dispatch API ---\n\n";
+
+$router2 = new Router();
+
+// Global: runs for EVERY request handled by $router2->dispatch()
+$router2->middleware(new CorsMiddleware([
+    'allowed_origins' => ['*'],
+    'allowed_methods' => ['GET', 'POST'],
+]));
+
+// Per-group middleware: runs for all routes inside '/admin'
+$router2->addGroup('/admin', function (Router $r): void {
+
+    // Per-route middleware: runs only for GET /admin/dashboard
+    $r->get('/dashboard', fn() => ['page' => 'admin dashboard'])
+      ->middleware(new class implements \Psr\Http\Server\MiddlewareInterface {
+          public function process(
+              ServerRequestInterface $request,
+              \Psr\Http\Server\RequestHandlerInterface $handler
+          ): ResponseInterface {
+              // e.g. verify the user owns the dashboard
+              return $handler->handle($request->withAttribute('checked_by', 'per-route'));
+          }
+      });
+
+    $r->get('/users', fn() => ['page' => 'users list']);
+
+}, [new class implements \Psr\Http\Server\MiddlewareInterface {
+    public function process(
+        ServerRequestInterface $request,
+        \Psr\Http\Server\RequestHandlerInterface $handler
+    ): ResponseInterface {
+        // e.g. admin auth gate — applied to every route in the group
+        return $handler->handle($request->withAttribute('checked_by', 'group'));
+    }
+}]);
+
+$router2->get('/public', fn() => ['page' => 'public page']);
+
+// Single entry point — no manual MiddlewareStack::create() needed.
+// Execution order: global → group → per-route → handler
+foreach (['/admin/dashboard' => 'GET', '/admin/users' => 'GET', '/public' => 'GET'] as $uri => $method) {
+    $response2 = $router2->dispatch($uri, $method);
+    $body      = json_decode((string)$response2->getBody(), true);
+    $status    = $response2->getStatusCode();
+    $icon      = $status < 400 ? '✓' : '✗';
+    echo "  {$icon} {$method} {$uri} → {$status} ({$body['page']})\n";
+}
+
+echo "\n✅ Dispatch API demo complete!\n";
+

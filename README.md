@@ -463,6 +463,95 @@ class LoggingMiddleware implements MiddlewareInterface
 }
 ```
 
+## Simple Dispatch API
+
+`dispatch()` is the recommended single entry point for most applications. It automatically
+builds and executes the full middleware + routing pipeline — no need to manually assemble
+`MiddlewareStack::create()`.
+
+### Middleware levels
+
+Register middleware at three levels:
+
+```php
+use dzentota\Router\Router;
+use dzentota\Router\Middleware\CorsMiddleware;
+use dzentota\Router\Middleware\CsrfMiddleware;
+use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\ServerRequestInterface;
+use Psr\Http\Server\MiddlewareInterface;
+use Psr\Http\Server\RequestHandlerInterface;
+
+$router = new Router(); // optionally: new Router($container, $logger)
+
+// 1. Global middleware — runs for EVERY request
+$router->middleware(new CorsMiddleware([
+    'allowed_origins' => ['https://app.example.com'],
+    'allowed_methods' => ['GET', 'POST', 'PUT', 'DELETE'],
+    'allow_credentials' => true,
+]));
+$router->middleware(new CsrfMiddleware(strategy: $csrfStrategy, cache: $cache));
+
+// 2. Group middleware — runs for every route inside the group
+$router->addGroup('/admin', function (Router $r): void {
+
+    // 3. Per-route middleware — runs only for this specific route
+    $r->get('/dashboard', 'AdminController@dashboard')
+      ->middleware(new class implements MiddlewareInterface {
+          public function process(ServerRequestInterface $req, RequestHandlerInterface $next): ResponseInterface
+          {
+              // e.g. verify dashboard-specific permission
+              return $next->handle($req);
+          }
+      });
+
+    $r->get('/users', 'AdminController@users');
+
+}, [new class implements MiddlewareInterface {
+    public function process(ServerRequestInterface $req, RequestHandlerInterface $next): ResponseInterface
+    {
+        // e.g. admin auth gate
+        return $next->handle($req);
+    }
+}]);
+
+$router->get('/public', 'HomeController@index');
+```
+
+### Single entry point
+
+```php
+// Execution order: global → group → per-route → handler
+$response = $router->dispatch($_SERVER['REQUEST_URI'], $_SERVER['REQUEST_METHOD']);
+```
+
+You may also pass a pre-built PSR-7 request as the optional third argument:
+
+```php
+$response = $router->dispatch('/admin/dashboard', 'GET', $psrRequest);
+```
+
+### Advanced use
+
+`MiddlewareStack::create()` remains fully supported for scenarios where you need
+explicit control over the pipeline (e.g. custom final handlers or complex ordering):
+
+```php
+use dzentota\Router\Middleware\MiddlewareStack;
+use dzentota\Router\Middleware\RouteMatchMiddleware;
+use dzentota\Router\Middleware\RouteDispatchMiddleware;
+
+$stack = MiddlewareStack::create(
+    $finalHandler,
+    new CorsMiddleware([...]),
+    new CsrfMiddleware(...),
+    new RouteMatchMiddleware($router),
+    new RouteDispatchMiddleware($container, $logger)
+);
+
+$response = $stack->handle($request);
+```
+
 ## Error Handling
 
 The router uses a typed exception hierarchy so callers can handle errors precisely:

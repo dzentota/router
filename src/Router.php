@@ -8,7 +8,17 @@ use dzentota\Router\Exception\InvalidConstraintException;
 use dzentota\Router\Exception\InvalidRouteException;
 use dzentota\Router\Exception\MethodNotAllowedException;
 use dzentota\Router\Exception\NotFoundException;
+use dzentota\Router\Middleware\MiddlewareStack;
+use dzentota\Router\Middleware\RouteDispatchMiddleware;
+use dzentota\Router\Middleware\RouteMatchMiddleware;
 use dzentota\TypedValue\Typed;
+use Nyholm\Psr7\Factory\Psr17Factory;
+use Psr\Container\ContainerInterface;
+use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\ServerRequestInterface;
+use Psr\Http\Server\MiddlewareInterface;
+use Psr\Http\Server\RequestHandlerInterface;
+use Psr\Log\LoggerInterface;
 
 /**
  * Security-first PSR-15 compatible router.
@@ -35,11 +45,51 @@ class Router
 
     /** @var Route[] Named routes indexed by name. */
     private array $namedRoutes = [];
-    /** Reverse index: route pattern → name, for O(1) lookup in RouteMatchMiddleware. */
+    /** Reverse index: route pattern:METHOD → name, for O(1) lookup. */
     private array $routeNameIndex = [];
 
     /** Whether to auto-generate a name for unnamed single-method routes. */
     private bool $autoNaming = false;
+
+    /** @var MiddlewareInterface[] Global middleware applied to every request via dispatch(). */
+    private array $globalMiddleware = [];
+
+    /** @var MiddlewareInterface[] Accumulated middleware for the current addGroup() scope. */
+    private array $currentGroupMiddleware = [];
+
+    /**
+     * @param ContainerInterface|null $container  PSR-11 container for handler DI (used by dispatch()).
+     * @param LoggerInterface|null    $logger     PSR-3 logger for dispatch error reporting.
+     */
+    public function __construct(
+        private readonly ?ContainerInterface $container = null,
+        private readonly ?LoggerInterface    $logger    = null,
+    ) {}
+
+    // -------------------------------------------------------------------------
+    // Global & group middleware registration
+    // -------------------------------------------------------------------------
+
+    /**
+     * Register one or more global middleware.
+     *
+     * Global middleware runs for **every** request, before route matching.
+     * Multiple calls accumulate; middleware runs in registration order.
+     *
+     * Typical usage:
+     * ```php
+     * $router->middleware(new CorsMiddleware([...]));
+     * $router->middleware(new CspMiddleware([...]));
+     * $router->middleware(new CsrfMiddleware(...));
+     * ```
+     */
+    public function middleware(MiddlewareInterface ...$middlewares): self
+    {
+        foreach ($middlewares as $mw) {
+            $this->globalMiddleware[] = $mw;
+        }
+        return $this;
+    }
 
     // -------------------------------------------------------------------------
     // Route registration
@@ -101,6 +151,10 @@ class Router
             },
         );
 
+        if (!empty($this->currentGroupMiddleware)) {
+            $routeObj->middleware(...$this->currentGroupMiddleware);
+        }
+
         if (!empty($constraints)) {
             $routeObj->where($constraints);
         }
@@ -127,16 +181,34 @@ class Router
     }
 
     /**
-     * Create a route group with a common URI prefix.
+     * Create a route group with a common URI prefix and optional shared middleware.
      *
-     * All routes registered inside the callback receive the prefix prepended.
+     * All routes registered inside the callback receive:
+     * - The prefix prepended to their URI pattern.
+     * - The group middleware prepended to their per-route middleware stack.
+     *
+     * Groups can be nested; middleware accumulates from outermost to innermost scope.
+     *
+     * ```php
+     * $router->addGroup('/admin', function (Router $r) {
+     *     $r->get('/dashboard', AdminDashController::class);
+     * }, [new AuthMiddleware(), new AdminRoleMiddleware()]);
+     * ```
+     *
+     * @param MiddlewareInterface[] $middleware Middleware applied to every route in this group.
      */
-    public function addGroup(string $prefix, callable $callback): void
+    public function addGroup(string $prefix, callable $callback, array $middleware = []): void
     {
-        $previousGroupPrefix      = $this->currentGroupPrefix;
-        $this->currentGroupPrefix = $previousGroupPrefix . $prefix;
+        $previousGroupPrefix     = $this->currentGroupPrefix;
+        $previousGroupMiddleware = $this->currentGroupMiddleware;
+
+        $this->currentGroupPrefix     = $previousGroupPrefix . $prefix;
+        $this->currentGroupMiddleware = array_merge($previousGroupMiddleware, $middleware);
+
         $callback($this);
-        $this->currentGroupPrefix = $previousGroupPrefix;
+
+        $this->currentGroupPrefix     = $previousGroupPrefix;
+        $this->currentGroupMiddleware = $previousGroupMiddleware;
     }
 
     /**
@@ -304,25 +376,27 @@ class Router
 
         if (isset($exec['method'][$method]) || isset($exec['method']['ANY'])) {
             return [
-                'route'  => $exec['route'],
-                'method' => $method,
-                'action' => $exec['method'][$method] ?? $exec['method']['ANY'],
-                'params' => $params,
+                'route'      => $exec['route'],
+                'method'     => $method,
+                'action'     => $exec['method'][$method] ?? $exec['method']['ANY'],
+                'params'     => $params,
+                'middleware' => $exec['middleware'][$method] ?? [],
             ];
         }
 
         if ($method === 'HEAD' && isset($exec['method']['GET'])) {
             return [
-                'route'  => $exec['route'],
-                'method' => $method,
-                'action' => $exec['method']['GET'],
-                'params' => $params,
+                'route'      => $exec['route'],
+                'method'     => $method,
+                'action'     => $exec['method']['GET'],
+                'params'     => $params,
+                'middleware' => $exec['middleware']['HEAD'] ?? $exec['middleware']['GET'] ?? [],
             ];
         }
 
         throw new MethodNotAllowedException(
             'Method: ' . $method . ' is not allowed for this route',
-            $exec['method']
+            array_keys($exec['method'])
         );
     }
 
@@ -518,6 +592,80 @@ class Router
     }
 
     // -------------------------------------------------------------------------
+    // Simple dispatch API
+    // -------------------------------------------------------------------------
+
+    /**
+     * Build and execute the full middleware + routing pipeline in one call.
+     *
+     * This is the recommended entry point for most applications. It eliminates
+     * the need to remember the correct ordering of `MiddlewareStack::create()`:
+     *
+     * ```php
+     * $router = new Router();
+     *
+     * // 1. Register global middleware (run for every request, in order)
+     * $router->middleware(new CorsMiddleware([...]));
+     * $router->middleware(new CsrfMiddleware(...));
+     *
+     * // 2. Define routes (with optional per-route or per-group middleware)
+     * $router->get('/public', 'PublicController@index');
+     *
+     * $router->addGroup('/admin', function (Router $r) {
+     *     $r->get('/dashboard', 'AdminController@dashboard');
+     * }, [new AuthMiddleware()]);
+     *
+     * $router->get('/upload', 'UploadController')
+     *        ->middleware(new MaxFileSizeMiddleware(10));
+     *
+     * // 3. Dispatch — everything is wired automatically
+     * $response = $router->dispatch($_SERVER['REQUEST_URI'], $_SERVER['REQUEST_METHOD']);
+     * ```
+     *
+     * **Pipeline order (automatically):**
+     * 1. Global middleware (registered via {@see middleware()})
+     * 2. `RouteMatchMiddleware` — finds the route, sets request attributes
+     * 3. Per-route / per-group middleware (from the matched route)
+     * 4. `RouteDispatchMiddleware` — executes the handler
+     *
+     * @param string                    $uri     Request URI (e.g. `$_SERVER['REQUEST_URI']`).
+     * @param string                    $method  HTTP method (e.g. `$_SERVER['REQUEST_METHOD']`).
+     * @param ServerRequestInterface|null $request Pre-built PSR-7 request; when null a minimal
+     *                                             request is created from $uri and $method.
+     */
+    public function dispatch(
+        string $uri,
+        string $method,
+        ?ServerRequestInterface $request = null,
+    ): ResponseInterface {
+        $factory = new Psr17Factory();
+
+        if ($request === null) {
+            $request = $factory->createServerRequest($method, $uri);
+        }
+
+        // The final handler is a 204 no-content stub — it should never be reached
+        // because RouteDispatchMiddleware already handles 404/405 internally.
+        $finalHandler = new class($factory) implements RequestHandlerInterface {
+            public function __construct(private readonly Psr17Factory $f) {}
+            public function handle(ServerRequestInterface $request): ResponseInterface
+            {
+                return $this->f->createResponse(204);
+            }
+        };
+
+        $layers = [
+            ...$this->globalMiddleware,
+            new RouteMatchMiddleware($this),
+            new RouteDispatchMiddleware($this->container, $this->logger),
+        ];
+
+        $stack = MiddlewareStack::create($finalHandler, ...$layers);
+
+        return $stack->handle($request);
+    }
+
+    // -------------------------------------------------------------------------
     // Magic shortcut methods (get/post/put/patch/delete/head/options)
     // -------------------------------------------------------------------------
 
@@ -664,6 +812,11 @@ class Router
                         $node['exec']['defaults'][$m] = $defaultSpecs;
                     }
                 }
+                if (!empty($route->getMiddleware())) {
+                    foreach (array_keys($route->getMethodMap()) as $m) {
+                        $node['exec']['middleware'][$m] = $route->getMiddleware();
+                    }
+                }
             } else {
                 $node['exec'] = [
                     'route'  => $route->getPattern(),
@@ -673,6 +826,11 @@ class Router
                     $defaultSpecs = $this->buildDefaultSpecs($route);
                     foreach (array_keys($route->getMethodMap()) as $m) {
                         $node['exec']['defaults'][$m] = $defaultSpecs;
+                    }
+                }
+                if (!empty($route->getMiddleware())) {
+                    foreach (array_keys($route->getMethodMap()) as $m) {
+                        $node['exec']['middleware'][$m] = $route->getMiddleware();
                     }
                 }
             }

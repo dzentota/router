@@ -6,6 +6,7 @@ namespace dzentota\Router;
 
 use dzentota\Router\Exception\InvalidConstraintException;
 use dzentota\TypedValue\Typed;
+use Psr\Http\Server\MiddlewareInterface;
 
 /**
  * Represents a single route definition
@@ -21,6 +22,8 @@ class Route
     private ?string $name = null;
     private array $defaults = [];
     private array $tags = [];
+    /** @var MiddlewareInterface[] */
+    private array $middleware = [];
 
     /**
      * @param string   $pattern      The URI pattern (e.g. '/users/{id}').
@@ -113,6 +116,29 @@ class Route
         }
         return $this;
     }
+
+    /**
+     * Attach one or more PSR-15 middleware to this route.
+     *
+     * Route middleware runs *after* route matching and *before* the route handler,
+     * sandwiched between the global middleware layer and the actual action.
+     * Multiple calls are cumulative; middleware runs in registration order.
+     *
+     * ```php
+     * $router->get('/admin/data', 'AdminController@data')
+     *        ->middleware(new AuthMiddleware(), new RateLimitMiddleware(60));
+     * ```
+     */
+    public function middleware(MiddlewareInterface ...$middlewares): self
+    {
+        foreach ($middlewares as $mw) {
+            $this->middleware[] = $mw;
+        }
+        return $this;
+    }
+
+    /** @return MiddlewareInterface[] */
+    public function getMiddleware(): array { return $this->middleware; }
 
     // -------------------------------------------------------------------------
     // Getters

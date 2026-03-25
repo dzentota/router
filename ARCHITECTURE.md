@@ -80,7 +80,60 @@ class UserId implements Typed
 
 ### 2. Middleware Architecture
 
-The middleware system follows PSR-15 standards with a comprehensive security-first approach:
+The middleware system follows PSR-15 standards with a comprehensive security-first approach.
+
+#### Simple Dispatch API (recommended)
+
+`Router::dispatch()` automatically builds and executes the full pipeline.
+Register middleware at three levels, then call `dispatch()` once:
+
+```
+Registration                        Runtime execution order
+─────────────────────────────────   ──────────────────────────────────────
+$router->middleware(...)            1. Global middleware (all requests)
+$router->addGroup(..., [], [mw])    2. RouteMatchMiddleware
+$route->middleware(...)             3. Group middleware  (matched group)
+                                    4. Per-route middleware (matched route)
+                                    5. Handler
+```
+
+`dispatch()` internally calls:
+```php
+MiddlewareStack::create(
+    $finalHandler,                        // 204 no-content stub (never reached in practice)
+    ...$this->globalMiddleware,           // registered via $router->middleware()
+    new RouteMatchMiddleware($this),      // sets route attributes on the request
+    new RouteDispatchMiddleware($container, $logger) // runs group+route sub-stack, then handler
+)
+```
+
+Per-route and group middleware are stored on the matched `Route` object and retrieved by
+`RouteDispatchMiddleware` from the `route_middleware` request attribute. They run as an
+inner sub-stack *before* the handler, preserving correct execution order:
+
+```
+global mw₁ → global mw₂ → RouteMatchMiddleware → [group mw → per-route mw] → handler
+                                                  ↑ sub-stack inside RouteDispatchMiddleware
+```
+
+#### Manual MiddlewareStack::create() (advanced)
+
+For full control over the pipeline (custom final handlers, complex ordering) the lower-level
+API remains available:
+
+```php
+$stack = MiddlewareStack::create(
+    $finalHandler,
+    new CorsMiddleware([...]),
+    new CspMiddleware([...]),
+    new CsrfMiddleware(...),
+    new RouteMatchMiddleware($router),
+    new RouteDispatchMiddleware($container, $logger)
+);
+$response = $stack->handle($request);
+```
+
+#### Request flow diagram
 
 ```
 Request Flow:
@@ -89,28 +142,33 @@ Request Flow:
 └─────────┬───────┘
           │
 ┌─────────▼───────┐
-│  CORS Middleware│ ← Preflight handling
+│  CORS Middleware│ ← Preflight handling          ┐
+└─────────┬───────┘                               │ Global middleware
+          │                                        │ (registered via
+┌─────────▼───────┐                               │  $router->middleware()
+│  CSP Middleware │ ← Security headers             │  or MiddlewareStack)
+└─────────┬───────┘                               │
+          │                                        │
+┌─────────▼───────┐                               │
+│Honeypot Middleware│ ← Bot detection             │
+└─────────┬───────┘                               │
+          │                                        │
+┌─────────▼───────┐                               │
+│ CSRF Middleware │ ← Token validation             ┘
 └─────────┬───────┘
           │
-┌─────────▼───────┐
-│  CSP Middleware │ ← Security headers
-└─────────┬───────┘
+┌─────────▼───────────┐
+│RouteMatch Middleware│ ← Route matching + sets route_middleware attribute
+└─────────┬───────────┘
           │
-┌─────────▼───────┐
-│Honeypot Middleware│ ← Bot detection
-└─────────┬───────┘
-          │
-┌─────────▼───────┐
-│ CSRF Middleware │ ← Token validation
-└─────────┬───────┘
-          │
-┌─────────▼───────┐
-│RouteMatch Middleware│ ← Route matching
-└─────────┬───────┘
-          │
-┌─────────▼───────┐
-│RouteDispatch Middleware│ ← Handler execution
-└─────────┬───────┘
+┌─────────▼──────────────────────────────────────┐
+│          RouteDispatch Middleware               │
+│  ┌──────────────────────────────────────────┐  │
+│  │  Group middleware (sub-stack, if any)    │  │
+│  │  Per-route middleware (sub-stack, if any)│  │
+│  │  Handler                                 │  │
+│  └──────────────────────────────────────────┘  │
+└─────────┬───────────────────────────────────────┘
           │
 ┌─────────▼───────┐
 │  HTTP Response  │
@@ -262,14 +320,18 @@ class MiddlewareStack implements RequestHandlerInterface
 
 ### Ordering Strategy
 
-Security middleware is ordered for optimal protection:
+When using `MiddlewareStack::create()` directly, security middleware should be ordered for optimal protection:
 
 1. **CORS** - Handle preflight requests first
 2. **CSP** - Add security headers early
 3. **Honeypot** - Detect bots before processing
 4. **CSRF** - Validate tokens before route matching
 5. **Route Match** - Match routes after security checks
-6. **Route Dispatch** - Execute handlers last
+6. **Route Dispatch** - Executes group/per-route sub-stack, then the handler
+
+When using `$router->dispatch()`, this ordering is applied automatically — global middleware
+runs in registration order, followed by `RouteMatchMiddleware`, then `RouteDispatchMiddleware`
+(which runs the per-route/group sub-stack internally).
 
 ## Performance Optimizations
 

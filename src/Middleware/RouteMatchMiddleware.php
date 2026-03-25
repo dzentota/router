@@ -79,6 +79,11 @@ class RouteMatchMiddleware implements MiddlewareInterface
             }
             $request = $request->withAttribute('route_params', $routeData['params']);
         }
+
+        // Pass per-route/group middleware to RouteDispatchMiddleware.
+        if (!empty($routeData['middleware'])) {
+            $request = $request->withAttribute('route_middleware', $routeData['middleware']);
+        }
         
         // Add route name (if it's a named route)
         // Look up route name from named routes collection
