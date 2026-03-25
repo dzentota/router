@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace dzentota\Router;
 
+use dzentota\Router\Exception\InvalidConstraintException;
+use dzentota\Router\Exception\InvalidRouteException;
 use dzentota\Router\Exception\MethodNotAllowedException;
 use dzentota\Router\Exception\NotFoundException;
 use dzentota\TypedValue\Typed;
@@ -24,6 +26,8 @@ class Router
     private array $allowedMethods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'];
     protected string $currentGroupPrefix = '';
     private array $namedRoutes = [];
+    /** Reverse index: route pattern → name, for O(1) lookup in RouteMatchMiddleware. */
+    private array $routeNameIndex = [];
 
     /**
      * Add new route to list of available routes
@@ -40,26 +44,36 @@ class Router
     {
         $method = (array)$method;
         $route = $this->currentGroupPrefix . $route;
+
+        // Guard against path traversal in route definitions.
+        if (str_contains($route, '..')) {
+            throw new InvalidRouteException("Route contains path traversal sequence: '{$route}'");
+        }
+
         $validMethods = array_merge($this->allowedMethods, ['ANY']);
         $methodsMap = [];
         if (array_diff($method, $validMethods)) {
-            throw new \Exception('Method(s):' . implode(', ', $method) . ' is not valid');
+            throw new InvalidRouteException('Method(s): ' . implode(', ', $method) . ' is not valid');
         }
         array_map(function (string $method) use ($action, &$methodsMap) {
             $methodsMap[$method] = $action;
         }, $method === ['ANY'] ? $this->allowedMethods : $method);
 
         $this->rawRoutes[] = ['route' => $route, 'method' => $methodsMap, 'constraints' => $constraints];
-        
-        // Store named route for URL generation
+
+        // Eagerly validate the route pattern (detects empty/duplicate param names immediately).
+        $this->parseUri($route);
+
         if ($name !== null) {
             $this->namedRoutes[$name] = [
                 'route' => $route,
                 'action' => $action,
-                'constraints' => $constraints
+                'constraints' => $constraints,
             ];
+            // Populate reverse index so RouteMatchMiddleware can look up names in O(1).
+            $this->routeNameIndex[$route] = $name;
         }
-        
+
         return $this;
     }
 
@@ -79,17 +93,15 @@ class Router
     /**
      * @param string $param
      * @param string $value
-     * @param $constraint
+     * @param mixed $constraint
      * @return Typed|null
      */
-    private function parseValue(string $param, string $value, $constraint): ?Typed
+    private function parseValue(string $param, string $value, mixed $constraint): ?Typed
     {
         if (empty($constraint)) {
-            throw new \DomainException("The parameter '{$param}' has no constraints");
+            throw new InvalidConstraintException("The parameter '{$param}' has no constraints");
         }
-        /**
-         * @var Typed $constraint
-         */
+        /** @var Typed $constraint */
         $constraint::tryParse($value, $typed);
         return $typed;
     }
@@ -182,23 +194,41 @@ class Router
     }
 
     /**
-     * Parse route structure and extract dynamic and optional parts
+     * Parse route structure and extract dynamic and optional parts.
      *
      * @param string $route
      * @return array
+     * @throws InvalidRouteException
      */
     protected function parseUri(string $route): array
     {
         $chunks = explode('/', '/' . trim($route, '/'));
         $chunks[0] = '/';
         $parsed = [];
-        //check for dynamic and optional parameters
+        $seenParams = [];
+
         foreach ($chunks as $chunk) {
             if (strpos($chunk, '{') === 0) {
-                if (strpos($chunk, '?}', -2) !== false) {// Optional dynamic
-                    $parsed[] = ['name' => mb_substr($chunk, 1, -2), 'use' => '?'];
+                if (strpos($chunk, '?}', -2) !== false) { // Optional dynamic
+                    $name = mb_substr($chunk, 1, -2);
+                    if ($name === '') {
+                        throw new InvalidRouteException("Route '{$route}' contains a parameter with an empty name");
+                    }
+                    if (isset($seenParams[$name])) {
+                        throw new InvalidRouteException("Route '{$route}' contains duplicate parameter name '{$name}'");
+                    }
+                    $seenParams[$name] = true;
+                    $parsed[] = ['name' => $name, 'use' => '?'];
                 } elseif (strpos($chunk, '}', -1) !== false) { // Mandatory dynamic
-                    $parsed[] = ['name' => mb_substr($chunk, 1, -1), 'use' => '*'];
+                    $name = mb_substr($chunk, 1, -1);
+                    if ($name === '') {
+                        throw new InvalidRouteException("Route '{$route}' contains a parameter with an empty name");
+                    }
+                    if (isset($seenParams[$name])) {
+                        throw new InvalidRouteException("Route '{$route}' contains duplicate parameter name '{$name}'");
+                    }
+                    $seenParams[$name] = true;
+                    $parsed[] = ['name' => $name, 'use' => '*'];
                 } else { // literal
                     $parsed[] = ['name' => $chunk, 'use' => $chunk];
                 }
@@ -270,56 +300,58 @@ class Router
     }
 
     /**
-     * Generate URL from named route
+     * Generate URL from named route.
      *
      * @param string $name
      * @param array $parameters
      * @return string
-     * @throws \Exception
+     * @throws InvalidRouteException
      */
     public function generateUrl(string $name, array $parameters = []): string
     {
         if (!isset($this->namedRoutes[$name])) {
-            throw new \Exception("Named route '{$name}' not found");
+            throw new InvalidRouteException("Named route '{$name}' not found");
         }
 
         $route = $this->namedRoutes[$name]['route'];
         $constraints = $this->namedRoutes[$name]['constraints'];
-        
-        // Replace parameters in route pattern
+
         $url = $route;
         foreach ($parameters as $key => $value) {
-            // Check if parameter has constraints and validate
             if (isset($constraints[$key])) {
                 $constraintClass = $constraints[$key];
                 if (!$constraintClass::tryParse($value, $typed)) {
-                    throw new \Exception("Parameter '{$key}' does not match constraint for route '{$name}'");
+                    throw new InvalidRouteException("Parameter '{$key}' does not match constraint for route '{$name}'");
                 }
                 $value = $typed->toNative();
             }
-            
-            // Replace both {key} and {key?} patterns
-            $url = str_replace(['{' . $key . '}', '{' . $key . '?}'], $value, $url);
+            $url = str_replace(['{' . $key . '}', '{' . $key . '?}'], (string)$value, $url);
         }
-        
-        // Check for remaining required parameters
-        if (preg_match('/\{([^?}]+)\}/', $url, $matches)) {
-            throw new \Exception("Missing required parameter '{$matches[1]}' for route '{$name}'");
+
+        // Detect any remaining required parameters.
+        // Uses possessive quantifier [^?}]++ to prevent catastrophic backtracking (ReDoS).
+        if (preg_match('/\{([^?}]++)\}/', $url, $matches)) {
+            throw new InvalidRouteException("Missing required parameter '{$matches[1]}' for route '{$name}'");
         }
-        
-        // Remove optional parameters that weren't provided
-        $url = preg_replace('/\{[^}]+\?\}/', '', $url);
-        
-        // Clean up any double slashes and trailing slashes
-        $url = preg_replace('#/+#', '/', $url);
+
+        // Remove optional parameters that were not provided.
+        // [^?}]++ excludes both '?' and '}' so the possessive quantifier stops before '?}'.
+        $url = preg_replace('/\{[^?}]++\?\}/', '', $url);
+
+        // Collapse any double slashes left by optional segment removal.
+        $url = preg_replace('#/++#', '/', $url);
         $url = rtrim($url, '/');
-        
-        // Ensure we always have at least a forward slash
-        if (empty($url)) {
-            $url = '/';
-        }
-        
-        return $url;
+
+        return $url !== '' ? $url : '/';
+    }
+
+    /**
+     * Look up the name registered for a given route pattern in O(1).
+     * Returns null when the pattern has no associated name.
+     */
+    public function findNameForRoute(string $routePattern): ?string
+    {
+        return $this->routeNameIndex[$routePattern] ?? null;
     }
 
     /**

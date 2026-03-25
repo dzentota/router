@@ -114,11 +114,18 @@ class CorsMiddleware implements MiddlewareInterface
     }
 
     /**
-     * Check if origin is allowed
+     * Check if origin is allowed.
+     * Rejects malformed Origin values before comparing against the whitelist.
      */
     private function isOriginAllowed(string $origin): bool
     {
         if (empty($origin)) {
+            return false;
+        }
+
+        // Reject syntactically invalid Origins before any whitelist comparison.
+        // A valid Origin is a URI with scheme + host (no path/query/fragment per RFC 6454).
+        if (!filter_var($origin, FILTER_VALIDATE_URL)) {
             return false;
         }
 

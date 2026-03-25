@@ -146,32 +146,65 @@ class CspMiddlewareBuilder
     }
 
     /**
-     * Allow inline scripts with nonce
+     * Allow inline scripts (unsafe-inline).
      *
+     * WARNING: This significantly weakens Content Security Policy.
+     * You must pass `true` to confirm you understand the security implications.
+     *
+     * @param bool $confirmed Pass true to acknowledge the security risk.
      * @return self
+     * @throws \InvalidArgumentException When called without explicit confirmation.
      */
-    public function allowInlineScripts(): self
+    public function allowInlineScripts(bool $confirmed = false): self
     {
+        if (!$confirmed) {
+            throw new \InvalidArgumentException(
+                "allowInlineScripts() adds 'unsafe-inline' to script-src, which weakens CSP significantly. " .
+                "Call allowInlineScripts(true) to confirm you accept this risk."
+            );
+        }
         return $this->modifyDirective('script-src', ["'unsafe-inline'"]);
     }
 
     /**
-     * Allow inline styles with nonce
+     * Allow inline styles (unsafe-inline).
      *
+     * WARNING: This significantly weakens Content Security Policy.
+     * You must pass `true` to confirm you understand the security implications.
+     *
+     * @param bool $confirmed Pass true to acknowledge the security risk.
      * @return self
+     * @throws \InvalidArgumentException When called without explicit confirmation.
      */
-    public function allowInlineStyles(): self
+    public function allowInlineStyles(bool $confirmed = false): self
     {
+        if (!$confirmed) {
+            throw new \InvalidArgumentException(
+                "allowInlineStyles() adds 'unsafe-inline' to style-src, which weakens CSP significantly. " .
+                "Call allowInlineStyles(true) to confirm you accept this risk."
+            );
+        }
         return $this->modifyDirective('style-src', ["'unsafe-inline'"]);
     }
 
     /**
-     * Allow eval() in scripts
+     * Allow eval() in scripts (unsafe-eval).
      *
+     * WARNING: This significantly weakens Content Security Policy.
+     * You must pass `true` to confirm you understand the security implications.
+     *
+     * @param bool $confirmed Pass true to acknowledge the security risk.
      * @return self
+     * @throws \InvalidArgumentException When called without explicit confirmation.
      */
-    public function allowEval(): self
+    public function allowEval(bool $confirmed = false): self
     {
+        if (!$confirmed) {
+            throw new \InvalidArgumentException(
+                "allowEval() adds 'unsafe-eval' to script-src, which weakens CSP significantly. " .
+                "Call allowEval(true) to confirm you accept this risk."
+            );
+        }
         return $this->modifyDirective('script-src', ["'unsafe-eval'"]);
     }
 

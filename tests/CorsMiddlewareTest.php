@@ -294,6 +294,73 @@ class CorsMiddlewareTest extends TestCase
         $this->assertEquals(403, $response->getStatusCode());
     }
 
+    // -------------------------------------------------------------------------
+    // Origin format validation
+    // -------------------------------------------------------------------------
+
+    public function testMalformedOriginIsRejectedOnPreflight(): void
+    {
+        $middleware = new CorsMiddleware([
+            'allowed_origins' => ['https://example.com'],
+        ]);
+
+        // Syntactically invalid Origin values must be rejected, even if they
+        // partially match the whitelist (e.g. header injection attempts).
+        $malformedOrigins = [
+            'not-a-url',
+            '<script>alert(1)</script>',
+            '',
+        ];
+
+        foreach ($malformedOrigins as $origin) {
+            $request = (new ServerRequest('OPTIONS', '/'))
+                ->withHeader('Origin', $origin)
+                ->withHeader('Access-Control-Request-Method', 'GET');
+
+            $response = $middleware->process($request, $this->createMockHandler());
+
+            $this->assertSame(
+                403,
+                $response->getStatusCode(),
+                "Expected 403 for malformed Origin: {$origin}"
+            );
+            $this->assertEmpty(
+                $response->getHeaderLine('Access-Control-Allow-Origin'),
+                "Should not echo malformed Origin in response: {$origin}"
+            );
+        }
+    }
+
+    public function testMalformedOriginIsRejectedOnActualRequest(): void
+    {
+        $middleware = new CorsMiddleware([
+            'allowed_origins' => ['https://example.com'],
+        ]);
+
+        $request = (new ServerRequest('GET', '/api'))
+            ->withHeader('Origin', 'javascript://evil');
+
+        $response = $middleware->process($request, $this->createMockHandler());
+
+        $this->assertEmpty($response->getHeaderLine('Access-Control-Allow-Origin'));
+    }
+
+    public function testValidOriginFormatIsStillAllowed(): void
+    {
+        $middleware = new CorsMiddleware([
+            'allowed_origins' => ['https://example.com'],
+        ]);
+
+        $request = (new ServerRequest('OPTIONS', '/'))
+            ->withHeader('Origin', 'https://example.com')
+            ->withHeader('Access-Control-Request-Method', 'GET');
+
+        $response = $middleware->process($request, $this->createMockHandler());
+
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('https://example.com', $response->getHeaderLine('Access-Control-Allow-Origin'));
+    }
+
     /**
      * Create a mock request handler that returns a 200 response
      */

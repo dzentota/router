@@ -196,6 +196,87 @@ class CsrfMiddlewareTest extends TestCase
         $this->assertContains('/api/dynamic', $exemptRoutes);
     }
 
+    // -------------------------------------------------------------------------
+    // Rate limiting
+    // -------------------------------------------------------------------------
+
+    public function testRateLimitingBlocksAfterThreshold(): void
+    {
+        $cache    = new ArrayCache();
+        $strategy = new SignedDoubleSubmitCookieStrategy(new TokenGenerator(), 'secret-key');
+
+        $mw = new CsrfMiddleware(
+            strategy:             $strategy,
+            cache:                $cache,
+            maxFailedAttempts:    3,
+            failureWindowSeconds: 3600,
+        );
+
+        $handler = $this->createMockHandler();
+
+        // Submit 3 POST requests without a CSRF token — each should record a failure.
+        for ($i = 0; $i < 3; $i++) {
+            $request  = new ServerRequest('POST', '/form', [], null, '1.1', ['REMOTE_ADDR' => '10.0.0.1']);
+            $response = $mw->process($request, $handler);
+            $this->assertSame(403, $response->getStatusCode(), "Request {$i} should be rejected (no token)");
+        }
+
+        // The 4th request should be blocked by the rate limiter (not even checked for token).
+        $request  = new ServerRequest('POST', '/form', [], null, '1.1', ['REMOTE_ADDR' => '10.0.0.1']);
+        $response = $mw->process($request, $handler);
+        $this->assertSame(403, $response->getStatusCode(), '4th request should be rate-limited');
+
+        // Decode response body to confirm it's the rate-limit message, not just a token error.
+        $body = json_decode((string)$response->getBody(), true);
+        $this->assertSame('Too many failed requests', $body['message']);
+    }
+
+    public function testRateLimitingDoesNotAffectDifferentIps(): void
+    {
+        $cache    = new ArrayCache();
+        $strategy = new SignedDoubleSubmitCookieStrategy(new TokenGenerator(), 'secret-key');
+
+        $mw = new CsrfMiddleware(
+            strategy:             $strategy,
+            cache:                $cache,
+            maxFailedAttempts:    2,
+            failureWindowSeconds: 3600,
+        );
+
+        $handler = $this->createMockHandler();
+
+        // Exhaust failures for IP A.
+        for ($i = 0; $i < 2; $i++) {
+            $r = new ServerRequest('POST', '/form', [], null, '1.1', ['REMOTE_ADDR' => '192.168.1.1']);
+            $mw->process($r, $handler);
+        }
+
+        // IP B should not be affected.
+        $requestB = new ServerRequest('POST', '/form', [], null, '1.1', ['REMOTE_ADDR' => '192.168.1.2']);
+        $responseB = $mw->process($requestB, $handler);
+
+        // B has no token either, so it should get a 403 — but the body should say token failure, not rate limit.
+        $body = json_decode((string)$responseB->getBody(), true);
+        $this->assertSame(403, $responseB->getStatusCode());
+        $this->assertNotSame('Too many failed requests', $body['message'] ?? '');
+    }
+
+    public function testRateLimitingDisabledWhenNoCacheProvided(): void
+    {
+        // Without a cache, unlimited failures are allowed (rate limiting is opt-in).
+        $strategy = new SignedDoubleSubmitCookieStrategy(new TokenGenerator(), 'secret-key');
+        $mw       = new CsrfMiddleware(strategy: $strategy);
+        $handler  = $this->createMockHandler();
+
+        for ($i = 0; $i < 10; $i++) {
+            $request  = new ServerRequest('POST', '/form', [], null, '1.1', ['REMOTE_ADDR' => '1.2.3.4']);
+            $response = $mw->process($request, $handler);
+            // All should be rejected for missing token — none should carry 'Too many failed requests'.
+            $body = json_decode((string)$response->getBody(), true);
+            $this->assertNotSame('Too many failed requests', $body['message'] ?? '', "Iteration {$i}");
+        }
+    }
+
     private function createMockHandler(): RequestHandlerInterface
     {
         return new class implements RequestHandlerInterface {

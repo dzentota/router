@@ -422,6 +422,70 @@ class RouterTest extends TestCase
         self::assertEquals('/users', $r->generateUrl('users.index'));
         self::assertEquals('/users/123', $r->generateUrl('users.update', ['id' => '123']));
     }
+
+    // -------------------------------------------------------------------------
+    // Security / edge-case tests
+    // -------------------------------------------------------------------------
+
+    public function testPathTraversalInRouteDefinitionIsRejected(): void
+    {
+        $this->expectException(\dzentota\Router\Exception\InvalidRouteException::class);
+
+        $r = new Router();
+        $r->get('/admin/../etc/passwd', 'action');
+    }
+
+    public function testEmptyParameterNameIsRejected(): void
+    {
+        $this->expectException(\dzentota\Router\Exception\InvalidRouteException::class);
+
+        $r = new Router();
+        $r->get('/users/{}/posts', 'action');
+    }
+
+    public function testDuplicateParameterNameIsRejected(): void
+    {
+        $this->expectException(\dzentota\Router\Exception\InvalidRouteException::class);
+
+        $r = new Router();
+        $r->get('/users/{id}/posts/{id}', 'action', ['id' => Id::class]);
+    }
+
+    public function testInvalidHttpMethodThrowsInvalidRouteException(): void
+    {
+        $this->expectException(\dzentota\Router\Exception\InvalidRouteException::class);
+
+        $r = new Router();
+        $r->addRoute('BOGUS', '/route', 'action');
+    }
+
+    public function testGenerateUrlWithManyUnmatchedBracesDoesNotHang(): void
+    {
+        // ReDoS regression: possessive quantifiers must prevent catastrophic backtracking.
+        $r = new Router();
+        $r->get('/test', 'action', [], 'test');
+
+        $start = microtime(true);
+        // Craft input that would cause exponential backtracking with a naive regex.
+        try {
+            $r->generateUrl('test', ['x' => str_repeat('{', 100)]);
+        } catch (\dzentota\Router\Exception\InvalidRouteException $e) {
+            // Expected — the generated URL contains an unresolved required-param placeholder.
+        }
+        $elapsed = microtime(true) - $start;
+
+        // Must complete in well under 1 second on any reasonable hardware.
+        self::assertLessThan(1.0, $elapsed, 'generateUrl() appears to have catastrophic backtracking (ReDoS)');
+    }
+
+    public function testNamedRouteReverseIndexLookup(): void
+    {
+        $r = new Router();
+        $r->get('/users/{id}', 'UserShow', ['id' => Id::class], 'users.show');
+
+        self::assertSame('users.show', $r->findNameForRoute('/users/{id}'));
+        self::assertNull($r->findNameForRoute('/nonexistent'));
+    }
 }
 
 class Id implements Typed

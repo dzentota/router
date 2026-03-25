@@ -146,7 +146,7 @@ class CspMiddlewareBuilderTest extends TestCase
     public function testAllowInlineScriptsModifiesDirective(): void
     {
         $builder = CspMiddlewareBuilder::create();
-        $newBuilder = $builder->allowInlineScripts();
+        $newBuilder = $builder->allowInlineScripts(true);
 
         // Создаем middleware и проверяем через reflection
         $middleware = $newBuilder->build();
@@ -161,7 +161,7 @@ class CspMiddlewareBuilderTest extends TestCase
     public function testAllowInlineStylesModifiesDirective(): void
     {
         $builder = CspMiddlewareBuilder::create();
-        $newBuilder = $builder->allowInlineStyles();
+        $newBuilder = $builder->allowInlineStyles(true);
 
         // Создаем middleware и проверяем через reflection
         $middleware = $newBuilder->build();
@@ -176,7 +176,7 @@ class CspMiddlewareBuilderTest extends TestCase
     public function testAllowEvalModifiesDirective(): void
     {
         $builder = CspMiddlewareBuilder::create();
-        $newBuilder = $builder->allowEval();
+        $newBuilder = $builder->allowEval(true);
 
         // Создаем middleware и проверяем через reflection
         $middleware = $newBuilder->build();
@@ -251,7 +251,7 @@ class CspMiddlewareBuilderTest extends TestCase
             ->reportOnly(true)
             ->allowScriptFrom($scriptDomain)
             ->allowStyleFrom($styleDomain)
-            ->allowInlineScripts()
+            ->allowInlineScripts(true)
             ->withNonce(true)
             ->withTokenGenerator($tokenGenerator)
             ->build();
@@ -283,5 +283,60 @@ class CspMiddlewareBuilderTest extends TestCase
         $tokenGeneratorProp = $reflectionClass->getProperty('tokenGenerator');
         $tokenGeneratorProp->setAccessible(true);
         $this->assertSame($tokenGenerator, $tokenGeneratorProp->getValue($middleware));
+    }
+
+    // -------------------------------------------------------------------------
+    // Unsafe-directive confirmation guard
+    // -------------------------------------------------------------------------
+
+    public function testAllowInlineScriptsRequiresExplicitConfirmation(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageMatches('/allowInlineScripts\(true\)/');
+
+        CspMiddlewareBuilder::create()->allowInlineScripts();
+    }
+
+    public function testAllowInlineStylesRequiresExplicitConfirmation(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageMatches('/allowInlineStyles\(true\)/');
+
+        CspMiddlewareBuilder::create()->allowInlineStyles();
+    }
+
+    public function testAllowEvalRequiresExplicitConfirmation(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageMatches('/allowEval\(true\)/');
+
+        CspMiddlewareBuilder::create()->allowEval();
+    }
+
+    public function testAllowInlineScriptsWithConfirmationSucceeds(): void
+    {
+        $middleware = CspMiddlewareBuilder::create()
+            ->allowInlineScripts(true)
+            ->build();
+
+        $this->assertInstanceOf(CspMiddleware::class, $middleware);
+    }
+
+    public function testAllowInlineStylesWithConfirmationSucceeds(): void
+    {
+        $middleware = CspMiddlewareBuilder::create()
+            ->allowInlineStyles(true)
+            ->build();
+
+        $this->assertInstanceOf(CspMiddleware::class, $middleware);
+    }
+
+    public function testAllowEvalWithConfirmationSucceeds(): void
+    {
+        $middleware = CspMiddlewareBuilder::create()
+            ->allowEval(true)
+            ->build();
+
+        $this->assertInstanceOf(CspMiddleware::class, $middleware);
     }
 }

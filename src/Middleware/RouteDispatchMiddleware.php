@@ -20,6 +20,8 @@ class RouteDispatchMiddleware implements MiddlewareInterface
 {
     private ?ContainerInterface $container;
     private Psr17Factory $responseFactory;
+    /** @var array<string, \ReflectionFunctionAbstract> Reflection cache keyed by handler identity. */
+    private array $reflectionCache = [];
 
     public function __construct(?ContainerInterface $container = null)
     {
@@ -47,17 +49,21 @@ class RouteDispatchMiddleware implements MiddlewareInterface
         try {
             // Resolve and execute the handler
             $response = $this->executeHandler($routeHandler, $request);
-            
+
             // Ensure we return a valid ResponseInterface
             if (!$response instanceof ResponseInterface) {
                 $response = $this->createResponseFromContent($response);
             }
-            
+
             return $response;
-            
+
+        } catch (\InvalidArgumentException $e) {
+            // Invalid handler configuration — surface as 500 without swallowing the context.
+            error_log('Route dispatch configuration error: ' . $e->getMessage());
+            return $this->createErrorResponse(500, 'Internal server error');
         } catch (\Throwable $e) {
-            // Log error and return 500 response
-            error_log("Route dispatch error: " . $e->getMessage());
+            // Unexpected error in user handler — log full trace, return generic 500.
+            error_log('Route dispatch error: ' . $e->getMessage() . "\n" . $e->getTraceAsString());
             return $this->createErrorResponse(500, 'Internal server error');
         }
     }
@@ -83,9 +89,11 @@ class RouteDispatchMiddleware implements MiddlewareInterface
     }
 
     /**
-     * Execute the route handler
+     * Execute the route handler.
+     *
+     * @param mixed $handler
      */
-    protected function executeHandler($handler, ServerRequestInterface $request)
+    protected function executeHandler(mixed $handler, ServerRequestInterface $request): mixed
     {
         // Handle different types of handlers
         
@@ -190,62 +198,91 @@ class RouteDispatchMiddleware implements MiddlewareInterface
     }
 
     /**
-     * Resolve method parameters using dependency injection
+     * Resolve method parameters using dependency injection.
+     * Reflection results are cached to avoid repeated introspection per request.
      */
     private function resolveParameters(callable $handler, ServerRequestInterface $request): array
     {
-        $reflection = new \ReflectionFunction($handler);
-        if (is_array($handler)) {
-            $reflection = new \ReflectionMethod($handler[0], $handler[1]);
-        }
-        
+        $reflection = $this->getCachedReflection($handler);
+
         $parameters = [];
         $routeParams = $request->getAttribute('route_params', []);
-        
+
         foreach ($reflection->getParameters() as $param) {
             $paramName = $param->getName();
             $paramType = $param->getType();
-            
-            // 1. Try to inject PSR-7 request
-            if ($paramType && $paramType->getName() === ServerRequestInterface::class) {
+            $typeName  = $paramType instanceof \ReflectionNamedType ? $paramType->getName() : null;
+
+            // 1. PSR-7 request injection
+            if ($typeName === ServerRequestInterface::class) {
                 $parameters[] = $request;
                 continue;
             }
-            
-            // 2. Try route parameters
+
+            // 2. Route parameters
             if (isset($routeParams[$paramName])) {
                 $parameters[] = $routeParams[$paramName];
                 continue;
             }
-            
-            // 3. Try request attributes
+
+            // 3. Request attributes
             if ($request->getAttribute($paramName) !== null) {
                 $parameters[] = $request->getAttribute($paramName);
                 continue;
             }
-            
-            // 4. Try container resolution (if type hint available)
-            if ($paramType && $this->container && $this->container->has($paramType->getName())) {
-                $parameters[] = $this->container->get($paramType->getName());
+
+            // 4. Container DI by type
+            if ($typeName !== null && $this->container && $this->container->has($typeName)) {
+                $parameters[] = $this->container->get($typeName);
                 continue;
             }
-            
-            // 5. Use default value if available
+
+            // 5. Default value
             if ($param->isDefaultValueAvailable()) {
                 $parameters[] = $param->getDefaultValue();
                 continue;
             }
-            
-            // 6. Allow nullable parameters
+
+            // 6. Nullable
             if ($param->allowsNull()) {
                 $parameters[] = null;
                 continue;
             }
-            
+
             throw new \InvalidArgumentException("Cannot resolve parameter '{$paramName}' for route handler");
         }
-        
+
         return $parameters;
+    }
+
+    /**
+     * Return a cached ReflectionFunctionAbstract for the given callable.
+     */
+    private function getCachedReflection(callable $handler): \ReflectionFunctionAbstract
+    {
+        if (is_array($handler)) {
+            $class  = is_object($handler[0]) ? get_class($handler[0]) : $handler[0];
+            $key    = $class . '::' . $handler[1];
+            if (!isset($this->reflectionCache[$key])) {
+                $this->reflectionCache[$key] = new \ReflectionMethod($handler[0], $handler[1]);
+            }
+            return $this->reflectionCache[$key];
+        }
+
+        if (is_object($handler) && !($handler instanceof \Closure)) {
+            $key = get_class($handler) . '::__invoke';
+            if (!isset($this->reflectionCache[$key])) {
+                $this->reflectionCache[$key] = new \ReflectionMethod($handler, '__invoke');
+            }
+            return $this->reflectionCache[$key];
+        }
+
+        // Closure or plain function — use spl_object_id for closures
+        $key = ($handler instanceof \Closure) ? 'closure_' . spl_object_id($handler) : (string)$handler;
+        if (!isset($this->reflectionCache[$key])) {
+            $this->reflectionCache[$key] = new \ReflectionFunction($handler);
+        }
+        return $this->reflectionCache[$key];
     }
 
     /**

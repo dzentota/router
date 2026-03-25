@@ -143,18 +143,13 @@ class RouteMatchMiddleware implements MiddlewareInterface
     }
     
     /**
-     * Find route name by matching route pattern and action
+     * Find route name using the router's reverse index (O(1)).
      */
     private function findRouteName(array $routeData): ?string
     {
-        $namedRoutes = $this->router->getNamedRoutes();
-        
-        foreach ($namedRoutes as $name => $namedRoute) {
-            if ($namedRoute['route'] === $routeData['route'] && $namedRoute['action'] === $routeData['action']) {
-                return $name;
-            }
+        if (!isset($routeData['route'])) {
+            return null;
         }
-        
-        return null;
+        return $this->router->findNameForRoute($routeData['route']);
     }
 } 
