@@ -37,9 +37,28 @@ $csrfStrategy = new SignedDoubleSubmitCookieStrategy(
 $csrfMiddleware = new CsrfMiddleware($csrfStrategy);
 ```
 
-#### SynchronizerTokenStrategy
+#### CSRF Failure Rate Limiting
 
-This stateful implementation stores tokens in a PSR-16 compatible cache:
+`CsrfMiddleware` accepts an optional PSR-16 cache to track per-IP validation failures and block repeated brute-force attempts:
+
+```php
+use dzentota\Router\Middleware\Cache\ArrayCache;
+
+// Block an IP after 5 CSRF failures within 1 hour.
+// Swap ArrayCache for a Redis/Memcached adapter in production.
+$csrfMiddleware = new CsrfMiddleware(
+    strategy:             $csrfStrategy,
+    cache:                new ArrayCache(),
+    maxFailedAttempts:    5,
+    failureWindowSeconds: 3600,
+);
+```
+
+When the threshold is exceeded the middleware returns `403 Forbidden` with the message `"Too many failed requests"` before even attempting token validation, preventing timing-based enumeration.
+
+Rate limiting is **opt-in**: omitting the `cache` parameter (or passing `null`) disables it, preserving backward compatibility.
+
+#### SynchronizerTokenStrategy
 
 ```php
 use dzentota\Router\Middleware\CsrfMiddleware;
@@ -61,50 +80,74 @@ $csrfMiddleware = new CsrfMiddleware($csrfStrategy);
 
 ### Content Security Policy (CSP)
 
-The CspMiddleware implements comprehensive Content Security Policy headers with nonce support:
+The `CspMiddleware` generates comprehensive CSP headers with per-request nonce support. Use `CspMiddlewareBuilder` for a fluent configuration API:
+
+```php
+use dzentota\Router\Middleware\Builder\CspMiddlewareBuilder;
+
+$cspMiddleware = CspMiddlewareBuilder::create()
+    ->allowScriptFrom('https://cdn.jsdelivr.net')
+    ->allowStyleFrom('https://fonts.googleapis.com')
+    ->withReportUri('https://example.com/csp-report')
+    ->withNonce(true)
+    ->build();
+```
+
+#### Unsafe directives require explicit confirmation
+
+`allowInlineScripts()`, `allowInlineStyles()`, and `allowEval()` weaken CSP
+significantly. Calling them without passing `true` throws an
+`InvalidArgumentException`, making the risk explicit:
+
+```php
+// ✗ Throws InvalidArgumentException
+CspMiddlewareBuilder::create()->allowInlineScripts();
+
+// ✓ Explicitly acknowledged
+CspMiddlewareBuilder::create()->allowInlineScripts(true);
+```
+
+You can also construct `CspMiddleware` directly for full control:
 
 ```php
 use dzentota\Router\Middleware\CspMiddleware;
 use dzentota\Router\Middleware\Security\TokenGenerator;
 
-$tokenGenerator = new TokenGenerator();
-$cspPolicy = [
-    'default-src' => ["'self'"],
-    'script-src' => ["'self'", 'https://cdn.jsdelivr.net'],
-    'style-src' => ["'self'", 'https://fonts.googleapis.com'],
-    'img-src' => ["'self'", 'data:'],
-    'font-src' => ["'self'", 'https://fonts.gstatic.com'],
-    'object-src' => ["'none'"],
-    'frame-ancestors' => ["'none'"],
-    'form-action' => ["'self'"],
-    'base-uri' => ["'self'"]
-];
-
-$reportOnly = false; // Set to true for testing without enforcement
-$reportUri = 'https://example.com/csp-report'; // Optional URI for violation reporting
-$addNonce = true; // Generate and append nonces for inline scripts/styles
-
-$cspMiddleware = new CspMiddleware($cspPolicy, $reportOnly, $reportUri, $addNonce, $tokenGenerator);
+$cspMiddleware = new CspMiddleware(
+    directives: [
+        'default-src'     => ["'self'"],
+        'script-src'      => ["'self'", 'https://cdn.jsdelivr.net'],
+        'style-src'       => ["'self'", 'https://fonts.googleapis.com'],
+        'img-src'         => ["'self'", 'data:'],
+        'font-src'        => ["'self'", 'https://fonts.gstatic.com'],
+        'object-src'      => ["'none'"],
+        'frame-ancestors' => ["'none'"],
+        'form-action'     => ["'self'"],
+        'base-uri'        => ["'self'"],
+    ],
+    reportOnly:     false,
+    reportUri:      'https://example.com/csp-report',
+    generateNonce:  true,
+    tokenGenerator: new TokenGenerator(),
+);
 ```
 
 ### Cross-Origin Resource Sharing (CORS)
 
-The CorsMiddleware implements RFC-compliant CORS headers with secure defaults:
+`CorsMiddleware` implements RFC-compliant CORS with secure defaults. **Origin headers are validated with `filter_var(FILTER_VALIDATE_URL)` before any whitelist comparison**, rejecting syntactically malformed values:
 
 ```php
 use dzentota\Router\Middleware\CorsMiddleware;
 
-$corsOptions = [
-    'allowed_origins' => ['https://trusted-app.example.com'],
-    'allowed_methods' => ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    'allowed_headers' => ['Content-Type', 'Authorization', 'X-CSRF-TOKEN'],
-    'exposed_headers' => ['X-Rate-Limit'],
-    'allow_credentials' => true,
-    'max_age' => 86400, // 24 hours
-    'require_exact_origin' => true // Strict origin checking
-];
-
-$corsMiddleware = new CorsMiddleware($corsOptions);
+$corsMiddleware = new CorsMiddleware([
+    'allowed_origins'      => ['https://trusted-app.example.com'],
+    'allowed_methods'      => ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    'allowed_headers'      => ['Content-Type', 'Authorization', 'X-CSRF-TOKEN'],
+    'exposed_headers'      => ['X-Rate-Limit'],
+    'allow_credentials'    => true,
+    'max_age'              => 86400,
+    'require_exact_origin' => true, // no wildcard matching
+]);
 ```
 
 ### Bot Detection and Rate Limiting
@@ -164,6 +207,35 @@ class UserId implements Typed
 
 // Using typed parameters in routes
 $router->get('/users/{id}', 'UserController@show', ['id' => UserId::class]);
+```
+
+## Route Definition Security
+
+Route patterns are validated **eagerly** at registration time, so misconfigurations are caught during startup rather than at runtime.
+
+```php
+use dzentota\Router\Exception\InvalidRouteException;
+
+// Path traversal — rejected immediately
+try {
+    $router->get('/admin/../../../etc/passwd', 'handler');
+} catch (InvalidRouteException $e) {
+    // "Route contains path traversal sequence"
+}
+
+// Duplicate parameter names — rejected immediately
+try {
+    $router->get('/users/{id}/posts/{id}', 'handler', ['id' => UserId::class]);
+} catch (InvalidRouteException $e) {
+    // "Route contains duplicate parameter name 'id'"
+}
+
+// Empty parameter name — rejected immediately
+try {
+    $router->get('/users/{}/posts', 'handler');
+} catch (InvalidRouteException $e) {
+    // "Route contains a parameter with an empty name"
+}
 ```
 
 ## Security Recommendations

@@ -101,23 +101,24 @@ Request Flow:
 - Strategy pattern for different protection approaches
 - Cryptographically secure token generation
 - HMAC-signed cookies for stateless protection
-- PSR-16 cache integration for stateful protection
+- PSR-16 cache integration for stateful token storage
+- Optional per-IP failure rate limiting via PSR-16 cache
 
 **Components:**
 ```
 CsrfMiddleware
 ├── CsrfProtectionStrategyInterface
-├── SignedDoubleSubmitCookieStrategy
-├── SynchronizerTokenStrategy
-├── TokenGenerator
-└── TokenStorageInterface
+│   ├── SignedDoubleSubmitCookieStrategy  — stateless, HMAC-signed
+│   └── SynchronizerTokenStrategy        — stateful, cache-backed
+├── TokenGenerator                        — random_bytes() + hex encoding
+└── (optional) PSR-16 CacheInterface      — failure rate limiting
 ```
 
-**Flow:**
-1. Token generation using cryptographically secure random bytes
-2. HMAC signing for stateless validation
-3. Cookie-based token distribution
-4. Request validation with timing attack protection
+**Rate-limiting flow:**
+1. Look up failure count for the request IP in cache
+2. If count ≥ threshold → immediately return 403 (no token checked)
+3. On validation failure → increment count with TTL; return 403
+4. On success → pass through; attach new token to response
 
 ### 2. Content Security Policy (`CspMiddleware`)
 
@@ -138,14 +139,15 @@ CsrfMiddleware
 **Architecture:**
 - Full CORS policy implementation
 - Preflight request handling
-- Origin validation with security-first defaults
+- **Origin format validation** (`filter_var(FILTER_VALIDATE_URL)`) before whitelist comparison — rejects syntactically malformed values
 - Method and header validation
 
 **Flow:**
-1. Origin validation against allowed origins
-2. Preflight request handling for complex requests
-3. Method and header validation
-4. Credential handling with security considerations
+1. Validate Origin header format; reject if malformed
+2. Compare against explicit origin whitelist
+3. Handle preflight (OPTIONS) with appropriate headers
+4. Method and header validation
+5. Credential handling with security considerations
 
 ### 4. Honeypot Protection (`HoneypotMiddleware`)
 
@@ -174,11 +176,15 @@ HoneypotMiddleware
 - Add route information to request attributes
 - Handle 404 and 405 responses
 
+**Named-route lookup (O(1)):**  
+`Router` maintains a `$routeNameIndex` reverse map (`route_pattern → name`) populated at registration. `RouteMatchMiddleware` calls `Router::findNameForRoute()` for a direct hash lookup instead of iterating all named routes.
+
 **Flow:**
 1. Parse request method and URI
 2. Traverse route tree for matching
 3. Validate parameters against type constraints
-4. Add route data to request attributes
+4. Look up route name via reverse index
+5. Add route data to request attributes
 
 ### 2. Route Dispatch (`RouteDispatchMiddleware`)
 
@@ -190,9 +196,12 @@ HoneypotMiddleware
 
 **Handler Types:**
 - Closures and callables
-- Controller@method strings
+- `Controller@method` strings
 - Invokable controllers
-- Array-based handlers
+- Array-based `[class, method]` handlers
+
+**Reflection caching:**  
+`ReflectionFunctionAbstract` instances are cached in `$reflectionCache` keyed by handler identity (class + method name, or closure object ID). Subsequent requests reuse the cached reflection, avoiding repeated introspection per request.
 
 ## Middleware Stack
 
@@ -256,28 +265,36 @@ $router->load(unserialize(file_get_contents('routes.cache')));
 ### 2. Type Validation Optimization
 
 Type validation uses optimized algorithms:
-- Early validation failure
-- Cached validation results
-- Minimal memory allocation
+- Early validation failure at route registration (`parseUri()` called eagerly in `addRoute()`)
+- Validated `Typed` objects carried as request attributes — no re-validation downstream
+- Possessive quantifiers (`[^?}]++`) in `generateUrl()` regex prevent ReDoS
 
 ### 3. Middleware Stack Optimization
 
-- Immutable middleware execution
-- No array mutations during request processing
-- Efficient handler chaining
+- Immutable middleware execution — no array mutations during request processing
+- Efficient handler chaining via index-based recursion
+- `RouteDispatchMiddleware` caches handler reflection results across requests
 
 ## Error Handling
 
 ### Exception Hierarchy
 
 ```
-RouterException
-├── NotFoundException
-├── MethodNotAllowedException
-└── SecurityException
-    ├── CsrfException
-    └── SecurityException
+\RuntimeException
+└── RouterException                 (src/Exception/RouterException.php)
+    ├── InvalidRouteException       — bad pattern, path traversal, unknown method
+    └── InvalidConstraintException  — parameter has no or invalid constraint class
+
+\Exception
+├── NotFoundException               — no route matched (→ 404)
+└── MethodNotAllowedException       — method not allowed (→ 405)
+
+\Exception (Middleware)
+├── CsrfException                   — token validation failure
+└── SecurityException               — general security violation
 ```
+
+`InvalidRouteException` is thrown **at route registration time** (not at first request), so misconfigured routes are caught during application bootstrap.
 
 ### Error Response Strategy
 

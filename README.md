@@ -102,12 +102,12 @@ use dzentota\Router\Middleware\RouteMatchMiddleware;
 use dzentota\Router\Middleware\RouteDispatchMiddleware;
 use dzentota\Router\Middleware\Builder\CspMiddlewareBuilder;
 use dzentota\Router\Middleware\Builder\HoneypotMiddlewareBuilder;
+use dzentota\Router\Middleware\Cache\ArrayCache;
 
 $router = new Router();
 
 // Add your routes here...
 
-// Using builders to configure middleware
 $cspMiddleware = CspMiddlewareBuilder::create()
     ->allowScriptFrom('https://cdn.jsdelivr.net')
     ->allowStyleFrom('https://fonts.googleapis.com')
@@ -121,17 +121,25 @@ $honeypotMiddleware = HoneypotMiddlewareBuilder::create()
     ->withMaxSubmissionsPerMinute(10)
     ->build();
 
-// Build secure middleware stack
+// Enable CSRF rate limiting — blocks an IP after 5 failures within 1 hour.
+$csrfMiddleware = new CsrfMiddleware(
+    strategy:             $csrfStrategy,
+    cache:                new ArrayCache(), // swap for Redis/Memcached in production
+    maxFailedAttempts:    5,
+    failureWindowSeconds: 3600,
+);
+
 $middlewareStack = MiddlewareStack::create(
     $finalHandler,
     new CorsMiddleware([
-        'allowed_origins' => ['https://app.example.com'],
-        'allowed_methods' => ['GET', 'POST', 'PUT', 'DELETE'],
-        'allow_credentials' => true
+        'allowed_origins'      => ['https://app.example.com'],
+        'allowed_methods'      => ['GET', 'POST', 'PUT', 'DELETE'],
+        'allow_credentials'    => true,
+        'require_exact_origin' => true,
     ]),
     $cspMiddleware,
     $honeypotMiddleware,
-    new CsrfMiddleware($csrfStrategy),
+    $csrfMiddleware,
     new RouteMatchMiddleware($router),
     new RouteDispatchMiddleware()
 );
@@ -236,11 +244,23 @@ $cspMiddleware = CspMiddlewareBuilder::create()
     ->allowScriptFrom('https://cdn.jsdelivr.net')
     ->allowStyleFrom('https://fonts.googleapis.com')
     ->withReportUri('https://example.com/csp-report')
-    ->allowInlineScripts() // Be careful with this one
     ->withNonce(true)
     ->reportOnly(false)
     ->build();
 ```
+
+> **⚠️ Unsafe directives require explicit confirmation.**  
+> Calling `allowInlineScripts()`, `allowInlineStyles()`, or `allowEval()` without
+> passing `true` throws an `InvalidArgumentException`. This prevents accidental
+> weakening of your CSP policy:
+>
+> ```php
+> // Throws InvalidArgumentException — explicit confirmation required
+> ->allowInlineScripts()
+>
+> // Correct — acknowledges the security trade-off
+> ->allowInlineScripts(true)
+> ```
 
 #### Honeypot Builder
 
@@ -283,17 +303,30 @@ class LoggingMiddleware implements MiddlewareInterface
 
 ## Error Handling
 
-The router provides comprehensive error handling:
+The router uses a typed exception hierarchy so callers can handle errors precisely:
 
 ```php
+use dzentota\Router\Exception\RouterException;
+use dzentota\Router\Exception\InvalidRouteException;
+use dzentota\Router\Exception\InvalidConstraintException;
+use dzentota\Router\Exception\NotFoundException;
+use dzentota\Router\Exception\MethodNotAllowedException;
+
+// Route registration — throws InvalidRouteException for bad definitions
+try {
+    $router->get('/users/{id}/posts/{id}', 'handler', ['id' => UserId::class]); // duplicate param
+    $router->get('/admin/../secret', 'handler');                                  // path traversal
+} catch (InvalidRouteException $e) {
+    // Bad route pattern caught immediately at registration time
+}
+
+// Route matching — throws NotFoundException / MethodNotAllowedException
 try {
     $route = $router->findRoute($method, $uri);
 } catch (NotFoundException $e) {
-    // Handle 404
-    return new NotFoundResponse();
+    // 404
 } catch (MethodNotAllowedException $e) {
-    // Handle 405
-    return new MethodNotAllowedResponse($e->getAllowedMethods());
+    // 405 — $e->getAllowedMethods() returns the permitted methods
 }
 ```
 
