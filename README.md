@@ -585,14 +585,38 @@ try {
 
 ### Route Caching
 
-```php
-// Generate route cache
-$cacheData = $router->dump();
-file_put_contents('routes.cache', serialize($cacheData));
+Use `exportCache()` and `importCache()` for file-based caching. These methods use
+**JSON** — never PHP's `serialize()` — making them immune to PHP Object Injection.
 
-// Load cached routes
-$router->load(unserialize(file_get_contents('routes.cache')));
+```php
+// On deploy / warm-up: export routes to a JSON cache file
+file_put_contents('routes.cache.json', $router->exportCache());
 ```
+
+```php
+// On every request: load from cache instead of re-registering routes
+if (file_exists('routes.cache.json')) {
+    $router->importCache(file_get_contents('routes.cache.json'));
+} else {
+    // Register routes normally
+    $router->get('/users/{id}', 'UserController@show')->where(['id' => UserId::class]);
+    // ...
+}
+```
+
+> **Requirements:**
+> - Handlers must be strings (`'Controller@method'`, `'Controller::method'`) or
+>   `[ClassName, method]` arrays. Closure handlers throw a `\LogicException` on
+>   `exportCache()`.
+> - Per-route and group **middleware** (PHP objects) are not cached. Re-attach them
+>   after `importCache()` using `Route::middleware()` or `addGroup()`.
+
+> **⚠️ Security warning — `dump()` / `load()`:**
+> These in-process methods return/accept a live PHP array containing objects and
+> closures. **Never** pass this data through PHP's `serialize()` / `unserialize()`.
+> Deserialising user-controlled data with `unserialize()` enables
+> [PHP Object Injection](https://owasp.org/www-community/vulnerabilities/PHP_Object_Injection).
+> Use `exportCache()` / `importCache()` for any file or network transfer.
 
 ## Testing
 

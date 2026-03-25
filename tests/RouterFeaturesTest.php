@@ -533,6 +533,152 @@ class RouterFeaturesTest extends TestCase
         $result = $r->findRoute('GET', '/invoke');
         self::assertSame('SomeController::handle', $result['action']);
     }
+
+    // =========================================================================
+    // exportCache() / importCache()
+    // =========================================================================
+
+    public function testExportCacheProducesValidJson(): void
+    {
+        $r = new Router();
+        $r->get('/users/{id}', 'UserController@show')
+          ->where(['id' => RouteId::class])
+          ->name('users.show')
+          ->tag('api');
+
+        $json = $r->exportCache();
+        $data = json_decode($json, true);
+
+        self::assertSame(1, $data['version']);
+        self::assertCount(1, $data['routes']);
+        $entry = $data['routes'][0];
+        self::assertSame(['GET'], $entry['methods']);
+        self::assertSame('/users/{id}', $entry['pattern']);
+        self::assertSame('UserController@show', $entry['handler']);
+        self::assertSame(['id' => RouteId::class], $entry['constraints']);
+        self::assertSame('users.show', $entry['name']);
+        self::assertSame(['api'], $entry['tags']);
+    }
+
+    public function testExportCacheThrowsForClosureHandler(): void
+    {
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessageMatches('/Closure/');
+
+        $r = new Router();
+        $r->get('/hello', fn() => 'hi');
+        $r->exportCache();
+    }
+
+    public function testImportCacheRestoresRoutes(): void
+    {
+        $original = new Router();
+        $original->get('/users/{id}', 'UserController@show')
+                 ->where(['id' => RouteId::class])
+                 ->name('users.show')
+                 ->tag('api');
+        $original->post('/users', 'UserController@store');
+
+        $json = $original->exportCache();
+
+        $restored = new Router();
+        $restored->importCache($json);
+
+        // Named route preserved
+        self::assertSame('/users/42', $restored->generateUrl('users.show', ['id' => '42']));
+
+        // Both routes are matchable
+        $get  = $restored->findRoute('GET', '/users/42');
+        self::assertSame('UserController@show', $get['action']);
+        self::assertInstanceOf(RouteId::class, $get['params']['id']);
+
+        $post = $restored->findRoute('POST', '/users');
+        self::assertSame('UserController@store', $post['action']);
+    }
+
+    public function testImportCacheWithArrayHandler(): void
+    {
+        $original = new Router();
+        $original->addRoute('GET', '/items', [PostController::class, 'index']);
+
+        $json     = $original->exportCache();
+        $restored = new Router();
+        $restored->importCache($json);
+
+        $result = $restored->findRoute('GET', '/items');
+        self::assertSame([PostController::class, 'index'], $result['action']);
+    }
+
+    public function testImportCacheReplacesExistingRoutes(): void
+    {
+        $original = new Router();
+        $original->get('/new', 'NewController@index');
+        $json = $original->exportCache();
+
+        $router = new Router();
+        $router->get('/old', 'OldController@index');
+
+        $router->importCache($json);
+
+        // Old route gone
+        $this->expectException(\dzentota\Router\Exception\NotFoundException::class);
+        $router->findRoute('GET', '/old');
+    }
+
+    public function testImportCacheThrowsOnInvalidJson(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageMatches('/invalid JSON/i');
+
+        (new Router())->importCache('not-json{{{');
+    }
+
+    public function testImportCacheThrowsOnWrongVersion(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageMatches('/version 1/i');
+
+        (new Router())->importCache(json_encode(['version' => 99, 'routes' => []]));
+    }
+
+    public function testImportCacheThrowsOnMissingKey(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageMatches('/missing key/i');
+
+        $payload = json_encode(['version' => 1, 'routes' => [
+            ['methods' => ['GET'], 'pattern' => '/x', 'handler' => 'Ctrl@act'],
+            // missing: constraints, defaults, name, tags
+        ]]);
+        (new Router())->importCache($payload);
+    }
+
+    public function testImportCacheThrowsOnClosureInHandler(): void
+    {
+        // JSON cannot contain closures — an 'object' handler would be invalid
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageMatches('/handler/i');
+
+        $payload = json_encode(['version' => 1, 'routes' => [
+            ['methods' => ['GET'], 'pattern' => '/x', 'handler' => ['only-one-element'],
+             'constraints' => [], 'defaults' => [], 'name' => null, 'tags' => []],
+        ]]);
+        (new Router())->importCache($payload);
+    }
+
+    public function testExportImportRoundTripWithDefaults(): void
+    {
+        $original = new Router();
+        $original->get('/page/{page}', 'PageController@show')
+                 ->where(['page' => RouteId::class])
+                 ->defaults(['page' => '1']);
+
+        $restored = new Router();
+        $restored->importCache($original->exportCache());
+
+        $result = $restored->findRoute('GET', '/page/5');
+        self::assertInstanceOf(RouteId::class, $result['params']['page']);
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -407,8 +407,13 @@ class Router
     /**
      * Build and return the compiled routes tree.
      *
-     * The returned array can be serialised and later restored via {@see load()} to
-     * skip the parse step on every request.
+     * **For in-process (in-memory) use only.**
+     * The returned array contains live PHP objects (constraint instances,
+     * middleware, closures) and MUST NOT be serialised with PHP's
+     * {@see serialize()} — doing so opens a PHP Object Injection vulnerability
+     * and will fail at runtime for closure handlers anyway.
+     *
+     * Use {@see exportCache()} / {@see importCache()} for file-based caching.
      */
     public function dump(): ?array
     {
@@ -420,12 +425,216 @@ class Router
 
     /**
      * Replace the routes tree with a previously {@see dump()}'d array.
-     * This overwrites any routes registered via addRoute().
+     *
+     * **For in-process (in-memory) use only** (e.g. testing, sharing a compiled
+     * tree between router instances in the same request lifecycle).
+     * Never pass data obtained from an untrusted source or from PHP's
+     * {@see unserialize()} — that enables PHP Object Injection.
+     *
+     * Use {@see importCache()} to restore routes from a file-based cache.
      */
     public function load(array $routes): self
     {
         $this->routesTree = $routes;
         return $this;
+    }
+
+    // -------------------------------------------------------------------------
+    // File-based route cache (safe serialisation via JSON)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Export all registered routes as a JSON string suitable for file-based caching.
+     *
+     * Unlike {@see dump()} + PHP `serialize()`, this method is **safe**:
+     * - Uses JSON (not PHP serialization) — PHP Object Injection is impossible.
+     * - Stores only JSON-native values: pattern strings, HTTP method arrays,
+     *   string/array handlers, constraint class-name strings, scalar defaults,
+     *   and route names/tags.
+     * - Per-route and group middleware objects are **excluded** — they are PHP
+     *   code and must be re-attached after loading the cache (via
+     *   {@see Route::middleware()} or {@see addGroup()}).
+     *
+     * Typical usage:
+     * ```php
+     * file_put_contents('routes.cache.json', $router->exportCache());
+     * ```
+     *
+     * @throws \LogicException If any route handler is a Closure (closures cannot
+     *                         be represented in JSON; use string handlers instead,
+     *                         e.g. 'UserController@show').
+     * @return string JSON-encoded cache payload.
+     */
+    public function exportCache(): string
+    {
+        $routes = [];
+        foreach ($this->rawRoutes as $route) {
+            $handler = $route->getAction();
+            if ($handler instanceof \Closure) {
+                throw new \LogicException(
+                    "Route '{$route->getPattern()}' uses a Closure handler which cannot be "
+                    . "exported to a JSON cache. Use a string handler (e.g. 'Controller@method') "
+                    . "or a [ClassName, method] array instead."
+                );
+            }
+            $routes[] = [
+                'methods'     => array_keys($route->getMethodMap()),
+                'pattern'     => $route->getPattern(),
+                'handler'     => $handler,
+                'constraints' => $route->getConstraints(),
+                'defaults'    => $route->getDefaults(),
+                'name'        => $route->getName(),
+                'tags'        => $route->getTags(),
+            ];
+        }
+
+        return json_encode(['version' => 1, 'routes' => $routes], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+    }
+
+    /**
+     * Import routes from a JSON cache string previously produced by {@see exportCache()}.
+     *
+     * This method uses `json_decode()` — never `unserialize()` — making it immune
+     * to PHP Object Injection. The payload is strictly validated; any structural
+     * deviation throws an `\InvalidArgumentException`.
+     *
+     * Per-route middleware (excluded during export) must be re-attached after import
+     * if required:
+     * ```php
+     * $router->importCache(file_get_contents('routes.cache.json'));
+     * // Re-attach middleware that cannot live in the cache file:
+     * $router->get('/admin/dashboard', 'AdminController@index')
+     *        ->middleware($authMiddleware);  // overrides any prior registration
+     * ```
+     *
+     * @param  string $json JSON string produced by {@see exportCache()}.
+     * @throws \InvalidArgumentException On invalid/tampered JSON or unexpected structure.
+     * @throws InvalidConstraintException If a cached constraint class does not implement Typed.
+     * @throws InvalidRouteException      If a cached route pattern or name is invalid.
+     */
+    public function importCache(string $json): self
+    {
+        try {
+            $data = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
+        } catch (\JsonException $e) {
+            throw new \InvalidArgumentException('Route cache contains invalid JSON: ' . $e->getMessage(), 0, $e);
+        }
+
+        if (!is_array($data) || ($data['version'] ?? null) !== 1 || !isset($data['routes']) || !is_array($data['routes'])) {
+            throw new \InvalidArgumentException('Route cache has an unrecognised format (expected version 1).');
+        }
+
+        // Clear existing routes so the cache is the sole source of truth.
+        $this->rawRoutes   = [];
+        $this->routesTree  = null;
+        $this->namedRoutes = [];
+        $this->routeNameIndex = [];
+
+        foreach ($data['routes'] as $index => $entry) {
+            $this->validateCacheEntry($entry, $index);
+
+            $routeObj = $this->addRoute(
+                $entry['methods'],
+                $entry['pattern'],
+                $entry['handler'],
+            );
+
+            if (!empty($entry['constraints'])) {
+                $routeObj->where($entry['constraints']);
+            }
+            if (!empty($entry['defaults'])) {
+                $routeObj->defaults($entry['defaults']);
+            }
+            if (!empty($entry['tags'])) {
+                $routeObj->tag($entry['tags']);
+            }
+            if ($entry['name'] !== null) {
+                $routeObj->name($entry['name']);
+            }
+        }
+
+        return $this;
+    }
+
+    /**
+     * Validate a single decoded cache entry; throws on malformed data.
+     *
+     * @throws \InvalidArgumentException
+     */
+    private function validateCacheEntry(mixed $entry, int $index): void
+    {
+        if (!is_array($entry)) {
+            throw new \InvalidArgumentException("Route cache entry #{$index} is not an array.");
+        }
+
+        $required = ['methods', 'pattern', 'handler', 'constraints', 'defaults', 'name', 'tags'];
+        foreach ($required as $key) {
+            if (!array_key_exists($key, $entry)) {
+                throw new \InvalidArgumentException("Route cache entry #{$index} is missing key '{$key}'.");
+            }
+        }
+
+        if (!is_array($entry['methods']) || empty($entry['methods'])) {
+            throw new \InvalidArgumentException("Route cache entry #{$index}: 'methods' must be a non-empty array.");
+        }
+        foreach ($entry['methods'] as $m) {
+            if (!is_string($m)) {
+                throw new \InvalidArgumentException("Route cache entry #{$index}: each method must be a string.");
+            }
+        }
+
+        if (!is_string($entry['pattern']) || $entry['pattern'] === '') {
+            throw new \InvalidArgumentException("Route cache entry #{$index}: 'pattern' must be a non-empty string.");
+        }
+
+        // Handler must be a string or a 2-element [class, method] array — no objects.
+        $handler = $entry['handler'];
+        if (
+            !is_string($handler) &&
+            !(is_array($handler) && count($handler) === 2 && is_string($handler[0]) && is_string($handler[1]))
+        ) {
+            throw new \InvalidArgumentException(
+                "Route cache entry #{$index}: 'handler' must be a string or a [class, method] array of strings."
+            );
+        }
+
+        if (!is_array($entry['constraints'])) {
+            throw new \InvalidArgumentException("Route cache entry #{$index}: 'constraints' must be an array.");
+        }
+        foreach ($entry['constraints'] as $param => $class) {
+            if (!is_string($param) || !is_string($class)) {
+                throw new \InvalidArgumentException(
+                    "Route cache entry #{$index}: each constraint must be a string param => string class mapping."
+                );
+            }
+        }
+
+        if (!is_array($entry['defaults'])) {
+            throw new \InvalidArgumentException("Route cache entry #{$index}: 'defaults' must be an array.");
+        }
+        foreach ($entry['defaults'] as $param => $value) {
+            if (!is_string($param)) {
+                throw new \InvalidArgumentException("Route cache entry #{$index}: default keys must be strings.");
+            }
+            if (!is_scalar($value) && $value !== null) {
+                throw new \InvalidArgumentException(
+                    "Route cache entry #{$index}: default values must be scalar or null."
+                );
+            }
+        }
+
+        if ($entry['name'] !== null && !is_string($entry['name'])) {
+            throw new \InvalidArgumentException("Route cache entry #{$index}: 'name' must be a string or null.");
+        }
+
+        if (!is_array($entry['tags'])) {
+            throw new \InvalidArgumentException("Route cache entry #{$index}: 'tags' must be an array.");
+        }
+        foreach ($entry['tags'] as $tag) {
+            if (!is_string($tag)) {
+                throw new \InvalidArgumentException("Route cache entry #{$index}: each tag must be a string.");
+            }
+        }
     }
 
     // -------------------------------------------------------------------------

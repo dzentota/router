@@ -337,16 +337,27 @@ runs in registration order, followed by `RouteMatchMiddleware`, then `RouteDispa
 
 ### 1. Route Tree Caching
 
-Routes are compiled into a tree structure that can be cached:
+Routes are compiled into a tree on the first request (or `dump()` call). For
+production deployments, export the route registration to a **JSON cache file** using
+the safe `exportCache()` / `importCache()` API:
 
 ```php
-// Generate cache
-$cacheData = $router->dump();
-file_put_contents('routes.cache', serialize($cacheData));
+// On deploy / warm-up: write the JSON cache
+file_put_contents('routes.cache.json', $router->exportCache());
 
-// Load cache
-$router->load(unserialize(file_get_contents('routes.cache')));
+// On every request: load from cache (skips addRoute() bootstrap)
+$router->importCache(file_get_contents('routes.cache.json'));
 ```
+
+`exportCache()` uses `json_encode()` — no PHP objects are serialised, making it
+immune to PHP Object Injection. Handlers must be strings or `[class, method]` arrays
+(closure handlers throw `\LogicException`). Per-route middleware is excluded from the
+cache (re-attach after loading if required).
+
+> **⚠️ Security — `dump()` / `load()`:**
+> These methods transfer the *live* in-process tree (containing objects and closures).
+> **Never** round-trip through `serialize()` / `unserialize()`. Use
+> `exportCache()` / `importCache()` for any file or network transfer.
 
 ### 2. Type Validation Optimization
 

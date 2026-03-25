@@ -246,6 +246,27 @@ the point of registration, not at the first HTTP request:
 $router->get('/items/{id}', 'handler')->where(['id' => 'some-regex-string']);
 ```
 
+## Route Cache Security
+
+`Router::exportCache()` serialises the route table to **JSON** (not PHP's `serialize()`),
+making the cache file immune to **PHP Object Injection**.
+
+```php
+// ✅ Safe — uses json_encode internally
+file_put_contents('routes.cache.json', $router->exportCache());
+$router->importCache(file_get_contents('routes.cache.json'));
+```
+
+```php
+// ❌ DANGEROUS — never do this
+file_put_contents('routes.cache', serialize($router->dump()));
+$router->load(unserialize(file_get_contents('routes.cache'))); // Object Injection risk
+```
+
+`importCache()` enforces a strict schema (version check, per-field type validation,
+whitelisted keys) to catch tampered or malformed cache files before any route
+is registered.
+
 ## Signed URLs
 
 `UrlSigner` generates HMAC-SHA256 signed URLs with a TTL. The signature covers
