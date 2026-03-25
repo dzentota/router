@@ -40,7 +40,6 @@ class HoneypotMiddlewareBuilderTest extends TestCase
         $middleware = $newBuilder->build();
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('honeypotFields');
-        $reflectionProperty->setAccessible(true);
 
         $this->assertEquals($fields, $reflectionProperty->getValue($middleware));
     }
@@ -59,7 +58,6 @@ class HoneypotMiddlewareBuilderTest extends TestCase
         $middleware = $newBuilder->build();
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('minTimeThreshold');
-        $reflectionProperty->setAccessible(true);
 
         $this->assertEquals($threshold, $reflectionProperty->getValue($middleware));
     }
@@ -78,7 +76,6 @@ class HoneypotMiddlewareBuilderTest extends TestCase
         $middleware = $newBuilder->build();
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('blockOnViolation');
-        $reflectionProperty->setAccessible(true);
 
         $this->assertEquals($block, $reflectionProperty->getValue($middleware));
     }
@@ -97,7 +94,6 @@ class HoneypotMiddlewareBuilderTest extends TestCase
         $middleware = $newBuilder->build();
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('logger');
-        $reflectionProperty->setAccessible(true);
 
         $this->assertSame($logger, $reflectionProperty->getValue($middleware));
     }
@@ -116,7 +112,6 @@ class HoneypotMiddlewareBuilderTest extends TestCase
         $middleware = $newBuilder->build();
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('storage');
-        $reflectionProperty->setAccessible(true);
 
         $this->assertSame($storage, $reflectionProperty->getValue($middleware));
     }
@@ -135,7 +130,6 @@ class HoneypotMiddlewareBuilderTest extends TestCase
         $middleware = $newBuilder->build();
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('maxSubmissionsPerMinute');
-        $reflectionProperty->setAccessible(true);
 
         $this->assertEquals($maxSubmissions, $reflectionProperty->getValue($middleware));
     }
@@ -162,27 +156,21 @@ class HoneypotMiddlewareBuilderTest extends TestCase
         $reflectionClass = new \ReflectionClass($middleware);
 
         $honeypotFieldsProp = $reflectionClass->getProperty('honeypotFields');
-        $honeypotFieldsProp->setAccessible(true);
         $this->assertEquals($fields, $honeypotFieldsProp->getValue($middleware));
 
         $thresholdProp = $reflectionClass->getProperty('minTimeThreshold');
-        $thresholdProp->setAccessible(true);
         $this->assertEquals($threshold, $thresholdProp->getValue($middleware));
 
         $maxSubmissionsProp = $reflectionClass->getProperty('maxSubmissionsPerMinute');
-        $maxSubmissionsProp->setAccessible(true);
         $this->assertEquals($maxSubmissions, $maxSubmissionsProp->getValue($middleware));
 
         $storageProp = $reflectionClass->getProperty('storage');
-        $storageProp->setAccessible(true);
         $this->assertSame($storage, $storageProp->getValue($middleware));
 
         $loggerProp = $reflectionClass->getProperty('logger');
-        $loggerProp->setAccessible(true);
         $this->assertSame($logger, $loggerProp->getValue($middleware));
 
         $blockProp = $reflectionClass->getProperty('blockOnViolation');
-        $blockProp->setAccessible(true);
         $this->assertFalse($blockProp->getValue($middleware));
     }
 }

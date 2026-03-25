@@ -8,6 +8,8 @@ use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Server\MiddlewareInterface;
 use Psr\Http\Server\RequestHandlerInterface;
 use Psr\Container\ContainerInterface;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 use Nyholm\Psr7\Factory\Psr17Factory;
 
 /**
@@ -20,13 +22,15 @@ class RouteDispatchMiddleware implements MiddlewareInterface
 {
     private ?ContainerInterface $container;
     private Psr17Factory $responseFactory;
+    private LoggerInterface $logger;
     /** @var array<string, \ReflectionFunctionAbstract> Reflection cache keyed by handler identity. */
     private array $reflectionCache = [];
 
-    public function __construct(?ContainerInterface $container = null)
+    public function __construct(?ContainerInterface $container = null, ?LoggerInterface $logger = null)
     {
-        $this->container = $container;
+        $this->container     = $container;
         $this->responseFactory = new Psr17Factory();
+        $this->logger        = $logger ?? new NullLogger();
     }
 
     /**
@@ -58,12 +62,10 @@ class RouteDispatchMiddleware implements MiddlewareInterface
             return $response;
 
         } catch (\InvalidArgumentException $e) {
-            // Invalid handler configuration — surface as 500 without swallowing the context.
-            error_log('Route dispatch configuration error: ' . $e->getMessage());
+            $this->logger->error('Route dispatch configuration error: ' . $e->getMessage());
             return $this->createErrorResponse(500, 'Internal server error');
         } catch (\Throwable $e) {
-            // Unexpected error in user handler — log full trace, return generic 500.
-            error_log('Route dispatch error: ' . $e->getMessage() . "\n" . $e->getTraceAsString());
+            $this->logger->error('Route dispatch error: ' . $e->getMessage(), ['exception' => $e]);
             return $this->createErrorResponse(500, 'Internal server error');
         }
     }

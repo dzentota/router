@@ -37,7 +37,6 @@ class CorsMiddlewareBuilderTest extends TestCase
         $middleware = $newBuilder->build();
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('config');
-        $reflectionProperty->setAccessible(true);
         $config = $reflectionProperty->getValue($middleware);
 
         $this->assertEquals($origins, $config['allowed_origins']);
@@ -54,7 +53,6 @@ class CorsMiddlewareBuilderTest extends TestCase
         $middleware = $newBuilder->build();
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('config');
-        $reflectionProperty->setAccessible(true);
         $config = $reflectionProperty->getValue($middleware);
 
         $this->assertContains($origin, $config['allowed_origins']);
@@ -69,7 +67,6 @@ class CorsMiddlewareBuilderTest extends TestCase
         $middleware = $newBuilder->build();
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('config');
-        $reflectionProperty->setAccessible(true);
         $config = $reflectionProperty->getValue($middleware);
 
         $this->assertEquals(['*'], $config['allowed_origins']);
@@ -86,7 +83,6 @@ class CorsMiddlewareBuilderTest extends TestCase
         $middleware = $newBuilder->build();
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('config');
-        $reflectionProperty->setAccessible(true);
         $config = $reflectionProperty->getValue($middleware);
 
         $this->assertEquals($methods, $config['allowed_methods']);
@@ -103,7 +99,6 @@ class CorsMiddlewareBuilderTest extends TestCase
         $middleware = $newBuilder->build();
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('config');
-        $reflectionProperty->setAccessible(true);
         $config = $reflectionProperty->getValue($middleware);
 
         $this->assertContains($method, $config['allowed_methods']);
@@ -120,7 +115,6 @@ class CorsMiddlewareBuilderTest extends TestCase
         $middleware = $newBuilder->build();
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('config');
-        $reflectionProperty->setAccessible(true);
         $config = $reflectionProperty->getValue($middleware);
 
         $this->assertEquals($headers, $config['allowed_headers']);
@@ -137,7 +131,6 @@ class CorsMiddlewareBuilderTest extends TestCase
         $middleware = $newBuilder->build();
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('config');
-        $reflectionProperty->setAccessible(true);
         $config = $reflectionProperty->getValue($middleware);
 
         $this->assertContains($header, $config['allowed_headers']);
@@ -154,7 +147,6 @@ class CorsMiddlewareBuilderTest extends TestCase
         $middleware = $newBuilder->build();
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('config');
-        $reflectionProperty->setAccessible(true);
         $config = $reflectionProperty->getValue($middleware);
 
         $this->assertEquals($headers, $config['exposed_headers']);
@@ -171,7 +163,6 @@ class CorsMiddlewareBuilderTest extends TestCase
         $middleware = $newBuilder->build();
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('config');
-        $reflectionProperty->setAccessible(true);
         $config = $reflectionProperty->getValue($middleware);
 
         $this->assertContains($header, $config['exposed_headers']);
@@ -186,7 +177,6 @@ class CorsMiddlewareBuilderTest extends TestCase
         $middleware = $newBuilder->build();
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('config');
-        $reflectionProperty->setAccessible(true);
         $config = $reflectionProperty->getValue($middleware);
 
         $this->assertTrue($config['allow_credentials']);
@@ -203,7 +193,6 @@ class CorsMiddlewareBuilderTest extends TestCase
         $middleware = $newBuilder->build();
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('config');
-        $reflectionProperty->setAccessible(true);
         $config = $reflectionProperty->getValue($middleware);
 
         $this->assertEquals($maxAge, $config['max_age']);
@@ -218,7 +207,6 @@ class CorsMiddlewareBuilderTest extends TestCase
         $middleware = $newBuilder->build();
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('config');
-        $reflectionProperty->setAccessible(true);
         $config = $reflectionProperty->getValue($middleware);
 
         $this->assertFalse($config['require_exact_origin']);
@@ -246,7 +234,6 @@ class CorsMiddlewareBuilderTest extends TestCase
 
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('config');
-        $reflectionProperty->setAccessible(true);
         $config = $reflectionProperty->getValue($middleware);
 
         $this->assertEquals($origins, $config['allowed_origins']);
@@ -270,7 +257,6 @@ class CorsMiddlewareBuilderTest extends TestCase
 
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('config');
-        $reflectionProperty->setAccessible(true);
         $config = $reflectionProperty->getValue($middleware);
 
         $this->assertCount(2, $config['allowed_origins']);
@@ -289,7 +275,6 @@ class CorsMiddlewareBuilderTest extends TestCase
 
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('config');
-        $reflectionProperty->setAccessible(true);
         $config = $reflectionProperty->getValue($middleware);
 
         // Убеждаемся, что origin добавлен только один раз

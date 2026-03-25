@@ -40,7 +40,6 @@ class CspMiddlewareBuilderTest extends TestCase
         $middleware = $newBuilder->build();
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('directives');
-        $reflectionProperty->setAccessible(true);
         $directives = $reflectionProperty->getValue($middleware);
 
         $this->assertEquals($sources, $directives[$directive]);
@@ -63,7 +62,6 @@ class CspMiddlewareBuilderTest extends TestCase
         $middleware = $newBuilder->build();
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('directives');
-        $reflectionProperty->setAccessible(true);
         $directives = $reflectionProperty->getValue($middleware);
 
         foreach ($newDirectives as $directive => $sources) {
@@ -83,7 +81,6 @@ class CspMiddlewareBuilderTest extends TestCase
         $middleware = $newBuilder->build();
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('reportOnly');
-        $reflectionProperty->setAccessible(true);
 
         $this->assertTrue($reflectionProperty->getValue($middleware));
     }
@@ -102,7 +99,6 @@ class CspMiddlewareBuilderTest extends TestCase
         $middleware = $newBuilder->build();
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('reportUri');
-        $reflectionProperty->setAccessible(true);
 
         $this->assertEquals($reportUri, $reflectionProperty->getValue($middleware));
     }
@@ -119,7 +115,6 @@ class CspMiddlewareBuilderTest extends TestCase
         $middleware = $newBuilder->build();
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('generateNonce');
-        $reflectionProperty->setAccessible(true);
 
         $this->assertFalse($reflectionProperty->getValue($middleware));
     }
@@ -138,7 +133,6 @@ class CspMiddlewareBuilderTest extends TestCase
         $middleware = $newBuilder->build();
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('tokenGenerator');
-        $reflectionProperty->setAccessible(true);
 
         $this->assertSame($tokenGenerator, $reflectionProperty->getValue($middleware));
     }
@@ -152,7 +146,6 @@ class CspMiddlewareBuilderTest extends TestCase
         $middleware = $newBuilder->build();
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('directives');
-        $reflectionProperty->setAccessible(true);
         $directives = $reflectionProperty->getValue($middleware);
 
         $this->assertContains("'unsafe-inline'", $directives['script-src']);
@@ -167,7 +160,6 @@ class CspMiddlewareBuilderTest extends TestCase
         $middleware = $newBuilder->build();
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('directives');
-        $reflectionProperty->setAccessible(true);
         $directives = $reflectionProperty->getValue($middleware);
 
         $this->assertContains("'unsafe-inline'", $directives['style-src']);
@@ -182,7 +174,6 @@ class CspMiddlewareBuilderTest extends TestCase
         $middleware = $newBuilder->build();
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('directives');
-        $reflectionProperty->setAccessible(true);
         $directives = $reflectionProperty->getValue($middleware);
 
         $this->assertContains("'unsafe-eval'", $directives['script-src']);
@@ -199,7 +190,6 @@ class CspMiddlewareBuilderTest extends TestCase
         $middleware = $newBuilder->build();
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('directives');
-        $reflectionProperty->setAccessible(true);
         $directives = $reflectionProperty->getValue($middleware);
 
         $this->assertContains($domain, $directives['script-src']);
@@ -216,7 +206,6 @@ class CspMiddlewareBuilderTest extends TestCase
         $middleware = $newBuilder->build();
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('directives');
-        $reflectionProperty->setAccessible(true);
         $directives = $reflectionProperty->getValue($middleware);
 
         $this->assertContains($domain, $directives['style-src']);
@@ -233,7 +222,6 @@ class CspMiddlewareBuilderTest extends TestCase
         $middleware = $newBuilder->build();
         $reflectionClass = new \ReflectionClass($middleware);
         $reflectionProperty = $reflectionClass->getProperty('directives');
-        $reflectionProperty->setAccessible(true);
         $directives = $reflectionProperty->getValue($middleware);
 
         $this->assertContains($domain, $directives['img-src']);
@@ -261,15 +249,12 @@ class CspMiddlewareBuilderTest extends TestCase
         $reflectionClass = new \ReflectionClass($middleware);
 
         $reportUriProp = $reflectionClass->getProperty('reportUri');
-        $reportUriProp->setAccessible(true);
         $this->assertEquals($reportUri, $reportUriProp->getValue($middleware));
 
         $reportOnlyProp = $reflectionClass->getProperty('reportOnly');
-        $reportOnlyProp->setAccessible(true);
         $this->assertTrue($reportOnlyProp->getValue($middleware));
 
         $directivesProp = $reflectionClass->getProperty('directives');
-        $directivesProp->setAccessible(true);
         $directives = $directivesProp->getValue($middleware);
 
         $this->assertContains($scriptDomain, $directives['script-src']);
@@ -277,11 +262,9 @@ class CspMiddlewareBuilderTest extends TestCase
         $this->assertContains("'unsafe-inline'", $directives['script-src']);
 
         $nonceProp = $reflectionClass->getProperty('generateNonce');
-        $nonceProp->setAccessible(true);
         $this->assertTrue($nonceProp->getValue($middleware));
 
         $tokenGeneratorProp = $reflectionClass->getProperty('tokenGenerator');
-        $tokenGeneratorProp->setAccessible(true);
         $this->assertSame($tokenGenerator, $tokenGeneratorProp->getValue($middleware));
     }
 
