@@ -80,11 +80,6 @@ class RouteMatchMiddleware implements MiddlewareInterface
             $request = $request->withAttribute('route_params', $routeData['params']);
         }
         
-        // Add route constraints (if any)
-        if (isset($routeData['constraints'])) {
-            $request = $request->withAttribute('route_constraints', $routeData['constraints']);
-        }
-        
         // Add route name (if it's a named route)
         // Look up route name from named routes collection
         $routeName = $this->findRouteName($routeData);

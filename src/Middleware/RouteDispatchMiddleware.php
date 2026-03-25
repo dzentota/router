@@ -104,9 +104,14 @@ class RouteDispatchMiddleware implements MiddlewareInterface
             return $this->executeCallable($handler, $request);
         }
         
-        // 2. Controller@method string
+        // 2. Controller@method string  or  Controller::method string (double-colon form)
         if (is_string($handler) && str_contains($handler, '@')) {
             return $this->executeControllerMethod($handler, $request);
+        }
+
+        if (is_string($handler) && str_contains($handler, '::')) {
+            // Normalise 'App\Controller::method' to 'App\Controller@method'
+            return $this->executeControllerMethod(str_replace('::', '@', $handler), $request);
         }
         
         // 3. Class name (invokable controller)

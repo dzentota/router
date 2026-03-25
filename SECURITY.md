@@ -238,6 +238,48 @@ try {
 }
 ```
 
+`Route::where()` validates that every constraint is a `Typed` class-string at
+the point of registration, not at the first HTTP request:
+
+```php
+// Throws InvalidConstraintException immediately — not at runtime
+$router->get('/items/{id}', 'handler')->where(['id' => 'some-regex-string']);
+```
+
+## Signed URLs
+
+`UrlSigner` generates HMAC-SHA256 signed URLs with a TTL. The signature covers
+the full path and query string (including the expiry timestamp), making it
+impossible to extend expiry or swap parameter values without the secret key.
+
+```php
+use dzentota\Router\UrlSigner;
+
+$signer = new UrlSigner($router, $_ENV['APP_KEY'], defaultTtl: 3600);
+
+$url = $signer->sign('invoices.download', ['id' => '42']);
+// /invoices/42/download?expires=1720000000&signature=<sha256-hmac>
+
+if (!$signer->verify($url)) {
+    // return 403 or 410
+}
+```
+
+**Key security properties:**
+
+| Property                   | Implementation                                           |
+|----------------------------|----------------------------------------------------------|
+| Expiry manipulation        | `expires` is inside the HMAC'd string                   |
+| Parameter substitution     | The full path is HMAC'd after URL generation             |
+| Timing attack on expiry    | Expiry is checked **before** the HMAC computation        |
+| Timing attack on signature | `hash_equals()` (constant-time comparison)               |
+| Weak key rejection         | Constructor throws if key is < 16 characters             |
+
+**Recommendations:**
+- Store the key in an environment variable (`APP_KEY`); never commit it.
+- Use at least 32 random bytes (256 bits) as the key.
+- Prefer short TTLs for sensitive one-time links (e.g. 15 minutes).
+
 ## Security Recommendations
 
 ### 1. Always Use HTTPS

@@ -14,12 +14,36 @@ The router core implements a tree-based route matching algorithm for optimal per
 
 ```
 Router
-├── Route Registration
+├── Route Registration   → returns fluent Route object
+├── Route class          → where() / name() / defaults() / tag()
 ├── Route Tree Construction
-├── Route Matching
-├── Parameter Validation
-└── URL Generation
+├── Route Matching       → applies defaults for absent optional params
+├── Parameter Validation (TypedValue parse)
+├── URL Generation       → validates params against Typed constraints
+├── resource() / apiResource() macros
+├── UrlSigner            → HMAC-signed URLs with TTL
+├── AttributeLoader      → PHP 8 #[RouteAttribute] scanning
+├── Auto-naming          → pattern-derived names for single-method routes
+└── Statistics / Tags    → getStats(), getRoutesByTag()
 ```
+
+#### Route Object (Fluent API)
+
+`addRoute()` (and all shortcut methods) return a `Route` instance.
+The `Route` object is stored by reference in `rawRoutes`; mutations take
+effect immediately:
+
+```php
+$router->get('/users/{id}', 'UserShow')
+       ->where(['id' => UserId::class])   // validates constraint implements Typed
+       ->name('users.show')               // registers in namedRoutes + reverse index
+       ->defaults(['id' => 1])            // injected when optional param absent
+       ->tag(['api', 'users']);            // for getRoutesByTag() / getStats()
+```
+
+`Route::name()` calls back to `Router::_registerRouteName()` so the named
+routes index and the O(1) reverse index (`routeNameIndex`) stay consistent
+at all times.
 
 #### Route Tree Structure
 
@@ -264,16 +288,26 @@ $router->load(unserialize(file_get_contents('routes.cache')));
 
 ### 2. Type Validation Optimization
 
-Type validation uses optimized algorithms:
 - Early validation failure at route registration (`parseUri()` called eagerly in `addRoute()`)
+- `Route::where()` validates constraint classes at call time, not at first request
 - Validated `Typed` objects carried as request attributes — no re-validation downstream
 - Possessive quantifiers (`[^?}]++`) in `generateUrl()` regex prevent ReDoS
 
-### 3. Middleware Stack Optimization
+### 3. Named Route Index
+
+`routeNameIndex` is a reverse map: `pattern → name`, maintained in O(1) by
+`Route::name()` calling `Router::_registerRouteName()`. `RouteMatchMiddleware`
+looks up the route name in O(1) instead of scanning the entire named-routes map.
+
+### 4. Reflection Caching
+
+`RouteDispatchMiddleware` caches `ReflectionFunctionAbstract` instances keyed by
+handler identity, avoiding repeated introspection per request.
+
+### 5. Middleware Stack Optimization
 
 - Immutable middleware execution — no array mutations during request processing
 - Efficient handler chaining via index-based recursion
-- `RouteDispatchMiddleware` caches handler reflection results across requests
 
 ## Error Handling
 

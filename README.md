@@ -187,9 +187,16 @@ $router->post('/users', function() {
 });
 ```
 
-### Named Routes
+### Named Routes — positional or fluent
+
 ```php
+// Legacy positional argument (still supported)
 $router->get('/users/{id}', 'UserController@show', ['id' => UserId::class], 'users.show');
+
+// Fluent API — recommended
+$router->get('/users/{id}', 'UserController@show')
+       ->where(['id' => UserId::class])
+       ->name('users.show');
 
 // Generate URL
 $url = $router->generateUrl('users.show', ['id' => 123]);
@@ -200,9 +207,164 @@ $url = $router->generateUrl('users.show', ['id' => 123]);
 $router->addGroup('/api/v1', function(Router $router) {
     $router->get('/users', 'UserController@index');
     $router->post('/users', 'UserController@store');
-    $router->get('/users/{id}', 'UserController@show', ['id' => UserId::class]);
+    $router->get('/users/{id}', 'UserController@show')
+           ->where(['id' => UserId::class]);
 });
 ```
+
+### Fluent route metadata
+
+After `addRoute()` / any shortcut method returns a `Route` object.  Chain as many
+methods as needed before registering the next route:
+
+```php
+$router->get('/reports/{id}', 'ReportShow')
+       ->where(['id' => ReportId::class])
+       ->name('reports.show')
+       ->defaults(['id' => 1])   // used when optional segment is absent
+       ->tag(['api', 'reports']);
+```
+
+| Method            | Purpose                                             |
+|-------------------|-----------------------------------------------------|
+| `->where([…])`    | Set Typed constraints (validates class at call time) |
+| `->name(string)`  | Assign/rename a route and update the reverse index  |
+| `->defaults([…])` | Raw defaults for optional params absent from URI    |
+| `->tag(string\|array)` | Tag the route for filtering / docs              |
+
+### Resource macros
+
+Generate a full set of conventional RESTful routes in one call:
+
+```php
+// Full resource (7 routes)
+$router->resource('/posts', PostController::class, ['id' => PostId::class]);
+//   GET    /posts              → PostController::index    (posts.index)
+//   GET    /posts/create       → PostController::create   (posts.create)
+//   POST   /posts              → PostController::store    (posts.store)
+//   GET    /posts/{id}         → PostController::show     (posts.show)
+//   GET    /posts/{id}/edit    → PostController::edit     (posts.edit)
+//   PUT|PATCH /posts/{id}      → PostController::update   (posts.update)
+//   DELETE /posts/{id}         → PostController::destroy  (posts.destroy)
+
+// API resource — omits create/edit HTML-form routes (5 routes)
+$router->apiResource('/api/comments', CommentController::class, ['id' => CommentId::class]);
+```
+
+Resources inside groups pick up the group prefix for both the URI and the route name:
+
+```php
+$router->addGroup('/admin', function (Router $r) {
+    $r->resource('/users', AdminUserController::class, ['id' => UserId::class]);
+    // routes named: admin.users.index, admin.users.show, …
+});
+```
+
+### PHP 8 Attribute-based routing
+
+Decorate controllers with `#[RouteAttribute]` and load them with `AttributeLoader`:
+
+```php
+use dzentota\Router\Attribute\RouteAttribute;
+
+#[RouteAttribute('/api/v1')]   // class-level prefix
+class UserController
+{
+    #[RouteAttribute('/users', methods: 'GET', name: 'users.index', tags: ['api'])]
+    public function index(): ResponseInterface { … }
+
+    #[RouteAttribute('/users/{id}', methods: 'GET', constraints: ['id' => UserId::class],
+                     name: 'users.show')]
+    public function show(UserId $id): ResponseInterface { … }
+
+    #[RouteAttribute('/users', methods: 'POST', name: 'users.store')]
+    public function store(): ResponseInterface { … }
+}
+
+// Load a single class
+(new AttributeLoader($router))->loadFromClass(UserController::class);
+
+// Or scan an entire directory
+(new AttributeLoader($router))->loadFromDirectory(__DIR__ . '/Controllers');
+```
+
+### Handler format
+
+The router accepts any of the following handler formats:
+
+| Format                          | Example                              |
+|---------------------------------|--------------------------------------|
+| Closure / callable              | `fn($req) => …`                      |
+| `Class@method`                  | `'UserController@show'`              |
+| `Class::method`                 | `'UserController::show'`             |
+| Invokable class string          | `'InvokableHandler'`                 |
+| Array `[class, method]`         | `[UserController::class, 'show']`    |
+
+### Auto-naming
+
+Enable auto-name generation for routes that have no explicit name.
+Generated names follow the pattern `{path-segments}.{method}`:
+
+```php
+$router->enableAutoNaming();
+
+$router->get('/admin/users/{id}', 'AdminUserShow', ['id' => UserId::class]);
+// auto-name: 'admin.users.id.get'
+
+$router->get('/profile', 'Profile');
+// auto-name: 'profile.get'
+
+// Explicit names always win
+$router->get('/login', 'Login', [], 'auth.login');
+// name remains 'auth.login', NOT 'login.get'
+```
+
+### Route tags and stats
+
+```php
+$router->get('/api/users', 'UserIndex')->tag(['api', 'public']);
+$router->get('/admin/users', 'AdminIndex')->tag('admin');
+
+// Find all routes carrying a tag
+$apiRoutes = $router->getRoutesByTag('api');
+
+// Aggregate statistics
+$stats = $router->getStats();
+// [
+//   'total'   => 2,
+//   'named'   => 0,
+//   'tagged'  => 2,
+//   'methods' => ['GET' => 2],
+//   'tags'    => ['api' => 1, 'public' => 1, 'admin' => 1],
+// ]
+```
+
+### Signed URLs
+
+Generate tamper-proof, time-limited URLs using HMAC-SHA256:
+
+```php
+use dzentota\Router\UrlSigner;
+
+$signer = new UrlSigner($router, $_ENV['APP_KEY'], defaultTtl: 3600);
+
+// Sign — adds ?expires=…&signature=… to the route URL
+$signedUrl = $signer->sign('invoices.download', ['id' => '42']);
+// → /invoices/42/download?expires=1720000000&signature=<hmac>
+
+// Verify — returns false if expired or tampered
+if (!$signer->verify($signedUrl)) {
+    // respond 403 or 410
+}
+```
+
+Security notes for signed URLs:
+- Store `APP_KEY` in an environment variable; never commit it.
+- Minimum key length is 16 characters; 32+ random bytes recommended.
+- Expiry is checked before the HMAC to avoid timing oracles on expired links.
+- Signature comparison uses `hash_equals()` (constant-time).
+
+
 
 ## Middleware
 
