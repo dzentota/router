@@ -19,6 +19,14 @@ use Nyholm\Psr7\Factory\Psr17Factory;
  * 
  * Detects and blocks automated form submissions by using hidden form fields
  * that should remain empty. If filled, indicates bot activity.
+ *
+ * Timing check: without a $timestampSecret the `_timestamp` field is an unsigned client
+ * value and is only checked when present, so a bot can trivially bypass it (omit it or send
+ * any time). Configure $timestampSecret to require an HMAC-signed timestamp token.
+ *
+ * Rate limiting: the default InMemoryRateLimitStorage lives only for the current PHP process
+ * and is effectively useless under PHP-FPM / CGI (state is lost after every request).
+ * In production inject a persistent RateLimitStorageInterface (Redis, APCu, database, ...).
  */
 class HoneypotMiddleware implements MiddlewareInterface
 {
@@ -71,6 +79,12 @@ class HoneypotMiddleware implements MiddlewareInterface
      */
     private int $maxSubmissionsPerMinute;
 
+    private ?string $timestampSecret;
+
+    private int $maxTimestampAge;
+
+    private ?\Closure $clientIpResolver;
+
     /**
      * Constructor
      *
@@ -80,6 +94,14 @@ class HoneypotMiddleware implements MiddlewareInterface
      * @param LoggerInterface|null $logger PSR-3 logger for security events
      * @param RateLimitStorageInterface|null $storage Storage for rate limiting
      * @param int $maxSubmissionsPerMinute Maximum submissions allowed per minute from one IP
+     * @param string|null $timestampSecret When set, `_timestamp` must be a token produced by
+     *                                     generateTimestamp() ("{unix}.{base64url(hmac-sha256)}");
+     *                                     missing, malformed or forged tokens are violations.
+     *                                     When null, the unsigned check is bypassable.
+     * @param int $maxTimestampAge Maximum age in seconds of the form timestamp (default 3600)
+     * @param callable|null $clientIpResolver callable(ServerRequestInterface): ?string returning the
+     *                                        rate-limit key (client IP); defaults to REMOTE_ADDR.
+     *                                        Returning null skips rate limiting.
      */
     public function __construct(
         array $honeypotFields = ['website', 'url', 'confirm_email'],
@@ -87,8 +109,17 @@ class HoneypotMiddleware implements MiddlewareInterface
         bool $blockOnViolation = true,
         ?LoggerInterface $logger = null,
         ?RateLimitStorageInterface $storage = null,
-        int $maxSubmissionsPerMinute = 5
+        int $maxSubmissionsPerMinute = 5,
+        ?string $timestampSecret = null,
+        int $maxTimestampAge = 3600,
+        ?callable $clientIpResolver = null
     ) {
+        if ($timestampSecret === '') {
+            throw new \InvalidArgumentException('timestampSecret must not be empty');
+        }
+        $this->timestampSecret = $timestampSecret;
+        $this->maxTimestampAge = $maxTimestampAge;
+        $this->clientIpResolver = $clientIpResolver !== null ? \Closure::fromCallable($clientIpResolver) : null;
         $this->honeypotFields = $honeypotFields;
         $this->minTimeThreshold = $minTimeThreshold;
         $this->blockOnViolation = $blockOnViolation;
@@ -150,7 +181,12 @@ class HoneypotMiddleware implements MiddlewareInterface
     private function checkHoneypotFields(array $parsedBody): void
     {
         foreach ($this->honeypotFields as $field) {
-            if (isset($parsedBody[$field]) && !empty(trim((string)$parsedBody[$field]))) {
+            if (!isset($parsedBody[$field])) {
+                continue;
+            }
+            $value = $parsedBody[$field];
+            // Legitimate forms send a scalar string; any array/object is treated as filled.
+            if (!is_scalar($value) || trim((string)$value) !== '') {
                 throw new SecurityException("Honeypot field '{$field}' was filled");
             }
         }
@@ -164,22 +200,58 @@ class HoneypotMiddleware implements MiddlewareInterface
      */
     private function checkSubmissionTiming(array $parsedBody): void
     {
-        if (!isset($parsedBody['_timestamp'])) {
-            return;
+        $raw = $parsedBody['_timestamp'] ?? null;
+
+        if ($this->timestampSecret === null) {
+            // Unsigned legacy mode: bypassable, only checked when present.
+            if ($raw === null) {
+                return;
+            }
+            $timestamp = is_scalar($raw) ? (int)$raw : 0;
+        } else {
+            $timestamp = $this->verifySignedTimestamp($raw);
         }
 
-        $timestamp = (int)$parsedBody['_timestamp'];
-        $currentTime = time();
-        $timeDiff = $currentTime - $timestamp;
+        $timeDiff = time() - $timestamp;
 
         if ($timeDiff < $this->minTimeThreshold) {
             throw new SecurityException("Form submitted too quickly ({$timeDiff}s)");
         }
 
         // Also check for suspiciously old timestamps (replay attacks)
-        if ($timeDiff > 3600) { // 1 hour
+        if ($timeDiff > $this->maxTimestampAge) {
             throw new SecurityException("Form timestamp too old ({$timeDiff}s)");
         }
+    }
+
+    /**
+     * @throws SecurityException When the token is missing, malformed or has an invalid signature
+     */
+    private function verifySignedTimestamp(mixed $raw): int
+    {
+        if (!is_string($raw) || !preg_match('/^(\d{1,12})\.([A-Za-z0-9_-]{43})$/', $raw, $m)) {
+            throw new SecurityException('Form timestamp token missing or malformed');
+        }
+        if (!hash_equals($this->sign($m[1]), $m[2])) {
+            throw new SecurityException('Form timestamp token signature invalid');
+        }
+        return (int)$m[1];
+    }
+
+    private function sign(string $unix): string
+    {
+        $mac = hash_hmac('sha256', $unix, (string)$this->timestampSecret, true);
+        return rtrim(strtr(base64_encode($mac), '+/', '-_'), '=');
+    }
+
+    private function getClientIp(ServerRequestInterface $request): ?string
+    {
+        if ($this->clientIpResolver !== null) {
+            $ip = ($this->clientIpResolver)($request);
+            return is_string($ip) && $ip !== '' ? $ip : null;
+        }
+        $ip = $request->getServerParams()['REMOTE_ADDR'] ?? null;
+        return is_string($ip) && $ip !== '' ? $ip : null;
     }
 
     /**
@@ -190,10 +262,9 @@ class HoneypotMiddleware implements MiddlewareInterface
      */
     private function checkRapidSubmissions(ServerRequestInterface $request): void
     {
-        $serverParams = $request->getServerParams();
-        $ipAddress = $serverParams['REMOTE_ADDR'] ?? null;
-        
-        if (!$ipAddress) {
+        $ipAddress = $this->getClientIp($request);
+
+        if ($ipAddress === null) {
             return;
         }
 
@@ -218,13 +289,11 @@ class HoneypotMiddleware implements MiddlewareInterface
      */
     private function logSecurityViolation(ServerRequestInterface $request, SecurityException $e): void
     {
-        $serverParams = $request->getServerParams();
-        
         $context = [
             'timestamp' => date('c'),
             'method' => $request->getMethod(),
             'uri' => (string)$request->getUri(),
-            'ip_address' => $serverParams['REMOTE_ADDR'] ?? 'unknown',
+            'ip_address' => $this->getClientIp($request) ?? 'unknown',
             'user_agent' => $request->getHeaderLine('User-Agent'),
             'referer' => $request->getHeaderLine('Referer'),
             'violation_type' => 'honeypot',
@@ -260,11 +329,15 @@ class HoneypotMiddleware implements MiddlewareInterface
     /**
      * Generate honeypot timestamp for forms
      *
-     * @return string Current timestamp as string
+     * With a timestamp secret this returns a signed token "{unix}.{base64url(hmac)}";
+     * otherwise the plain unix time (unsigned, bypassable).
+     *
+     * @return string Value for the `_timestamp` hidden form field
      */
     public function generateTimestamp(): string
     {
-        return (string)time();
+        $now = (string)time();
+        return $this->timestampSecret === null ? $now : $now . '.' . $this->sign($now);
     }
 
     /**
