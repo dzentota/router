@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace dzentota\Router\Middleware\Security;
 
 use dzentota\Router\Middleware\Contract\CsrfProtectionStrategyInterface;
+use dzentota\Router\Middleware\Contract\CsrfTokenProviderInterface;
 use dzentota\Router\Middleware\Contract\TokenGeneratorInterface;
 use dzentota\Router\Middleware\Exception\CsrfException;
 use Psr\Http\Message\ResponseInterface;
@@ -16,8 +17,11 @@ use Psr\Http\Message\ServerRequestInterface;
  * - A random token stored in a cookie (readable by JavaScript)
  * - HMAC signature of the token sent in X-CSRF-TOKEN header
  */
-class SignedDoubleSubmitCookieStrategy implements CsrfProtectionStrategyInterface
+class SignedDoubleSubmitCookieStrategy implements CsrfProtectionStrategyInterface, CsrfTokenProviderInterface
 {
+    /** Internal request attribute carrying a cookie token generated during this request. */
+    public const NEW_COOKIE_ATTRIBUTE = '__csrf_new_cookie_token';
+
     private TokenGeneratorInterface $tokenGenerator;
     private string $serverSecret;
     private string $cookieName;
@@ -53,8 +57,9 @@ class SignedDoubleSubmitCookieStrategy implements CsrfProtectionStrategyInterfac
         $existingToken = $cookies[$this->cookieName] ?? null;
         
         if ($existingToken === null) {
-            // Generate new token
-            $token = $this->tokenGenerator->generateToken();
+            // Reuse the token generated in prepareRequest() (so the form token matches), else generate
+            $token = $request->getAttribute(self::NEW_COOKIE_ATTRIBUTE)
+                ?? $this->tokenGenerator->generateToken();
             
             // Build cookie string with security attributes
             $cookieValue = $this->buildCookieString($token);
@@ -63,6 +68,22 @@ class SignedDoubleSubmitCookieStrategy implements CsrfProtectionStrategyInterfac
         }
         
         return $response;
+    }
+
+    /**
+     * Expose the form token (HMAC signature of the cookie token) to handlers.
+     * On a first visit (no cookie yet) a cookie token is generated now and
+     * later set by attachToken(), so the form token is usable immediately.
+     */
+    public function prepareRequest(ServerRequestInterface $request, string $tokenAttribute): ServerRequestInterface
+    {
+        $cookieToken = $request->getCookieParams()[$this->cookieName] ?? null;
+        if (!is_string($cookieToken) || $cookieToken === '') {
+            $cookieToken = $request->getAttribute(self::NEW_COOKIE_ATTRIBUTE)
+                ?? $this->tokenGenerator->generateToken();
+            $request = $request->withAttribute(self::NEW_COOKIE_ATTRIBUTE, $cookieToken);
+        }
+        return $request->withAttribute($tokenAttribute, $this->generateSignature($cookieToken));
     }
 
     /**

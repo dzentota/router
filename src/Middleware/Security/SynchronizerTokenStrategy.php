@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace dzentota\Router\Middleware\Security;
 
 use dzentota\Router\Middleware\Contract\CsrfProtectionStrategyInterface;
+use dzentota\Router\Middleware\Contract\CsrfTokenProviderInterface;
 use dzentota\Router\Middleware\Contract\TokenGeneratorInterface;
 use dzentota\Router\Middleware\Exception\CsrfException;
 use Psr\Http\Message\ResponseInterface;
@@ -16,8 +17,13 @@ use Psr\SimpleCache\CacheInterface;
  * Stateful strategy that stores one-time tokens in PSR-16 compatible cache.
  * Supports multiple tabs by maintaining a pool of valid tokens per session.
  */
-class SynchronizerTokenStrategy implements CsrfProtectionStrategyInterface
+class SynchronizerTokenStrategy implements CsrfProtectionStrategyInterface, CsrfTokenProviderInterface
 {
+    /** Internal request attribute carrying the token issued for this request. */
+    public const ISSUED_TOKEN_ATTRIBUTE = '__csrf_issued_token';
+
+    /** @var (\Closure(ServerRequestInterface): ?string)|null */
+    private ?\Closure $sessionIdResolver;
     private TokenGeneratorInterface $tokenGenerator;
     private CacheInterface $cache;
     private string $sessionAttribute;
@@ -29,8 +35,10 @@ class SynchronizerTokenStrategy implements CsrfProtectionStrategyInterface
         CacheInterface $cache,
         string $sessionAttribute = 'session_id',
         int $maxTokensPerSession = 10,
-        int $tokenTtl = 3600
+        int $tokenTtl = 3600,
+        ?callable $sessionIdResolver = null,
     ) {
+        $this->sessionIdResolver = $sessionIdResolver !== null ? \Closure::fromCallable($sessionIdResolver) : null;
         $this->tokenGenerator = $tokenGenerator;
         $this->cache = $cache;
         $this->sessionAttribute = $sessionAttribute;
@@ -48,14 +56,35 @@ class SynchronizerTokenStrategy implements CsrfProtectionStrategyInterface
             throw new CsrfException('Session ID not found in request attributes');
         }
 
-        // Generate new token
-        $token = $this->tokenGenerator->generateToken();
-        
-        // Add token to cache pool
-        $this->addTokenToPool($sessionId, $token);
+        // Reuse the token issued in prepareRequest() if any, else issue a new one
+        $token = $request->getAttribute(self::ISSUED_TOKEN_ATTRIBUTE);
+        if (!is_string($token)) {
+            $token = $this->tokenGenerator->generateToken();
+            $this->addTokenToPool($sessionId, $token);
+        }
         
         // Add token to response headers for JavaScript access
         return $response->withAddedHeader('X-CSRF-TOKEN', $token);
+    }
+
+    /**
+     * Issue a token before the handler runs and expose it under $tokenAttribute.
+     * Without a session id the request is returned unchanged.
+     */
+    public function prepareRequest(ServerRequestInterface $request, string $tokenAttribute): ServerRequestInterface
+    {
+        $sessionId = $this->getSessionId($request);
+        if ($sessionId === null) {
+            return $request;
+        }
+        $token = $request->getAttribute(self::ISSUED_TOKEN_ATTRIBUTE);
+        if (!is_string($token)) {
+            $token = $this->tokenGenerator->generateToken();
+            $this->addTokenToPool($sessionId, $token);
+        }
+        return $request
+            ->withAttribute(self::ISSUED_TOKEN_ATTRIBUTE, $token)
+            ->withAttribute($tokenAttribute, $token);
     }
 
     /**
@@ -85,7 +114,14 @@ class SynchronizerTokenStrategy implements CsrfProtectionStrategyInterface
      */
     private function getSessionId(ServerRequestInterface $request): ?string
     {
-        return $request->getAttribute($this->sessionAttribute);
+        if ($this->sessionIdResolver !== null) {
+            $id = ($this->sessionIdResolver)($request);
+            if (is_string($id) && $id !== '') {
+                return $id;
+            }
+        }
+        $id = $request->getAttribute($this->sessionAttribute);
+        return is_string($id) && $id !== '' ? $id : null;
     }
 
     /**
