@@ -58,6 +58,43 @@ class HoneypotMiddlewareBuilder
      */
     private int $maxSubmissionsPerMinute = 5;
 
+    private ?string $timestampSecret = null;
+
+    private int $maxTimestampAge = 3600;
+
+    /** @var callable|null */
+    private $clientIpResolver = null;
+
+    /**
+     * Require HMAC-signed `_timestamp` tokens (recommended).
+     */
+    public function withTimestampSecret(string $secret): self
+    {
+        $clone = clone $this;
+        $clone->timestampSecret = $secret;
+        return $clone;
+    }
+
+    /**
+     * Maximum age in seconds of the form timestamp (default 3600).
+     */
+    public function withMaxTimestampAge(int $seconds): self
+    {
+        $clone = clone $this;
+        $clone->maxTimestampAge = $seconds;
+        return $clone;
+    }
+
+    /**
+     * @param callable $resolver callable(ServerRequestInterface): ?string returning the client IP
+     */
+    public function withClientIpResolver(callable $resolver): self
+    {
+        $clone = clone $this;
+        $clone->clientIpResolver = $resolver;
+        return $clone;
+    }
+
     /**
      * Set honeypot field names
      *
@@ -159,7 +196,10 @@ class HoneypotMiddlewareBuilder
             $this->blockOnViolation,
             $this->logger ?? new NullLogger(),
             $this->storage ?? new InMemoryRateLimitStorage(),
-            $this->maxSubmissionsPerMinute
+            $this->maxSubmissionsPerMinute,
+            $this->timestampSecret,
+            $this->maxTimestampAge,
+            $this->clientIpResolver
         );
     }
 }

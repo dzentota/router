@@ -434,8 +434,23 @@ $honeypotMiddleware = HoneypotMiddlewareBuilder::create()
     ->withMinTimeThreshold(3)
     ->withMaxSubmissionsPerMinute(10)
     ->withBlockOnViolation(true)
+    ->withTimestampSecret($_ENV['HONEYPOT_SECRET'])   // require signed _timestamp
+    ->withMaxTimestampAge(3600)
+    ->withStorage($persistentStorage)                // REQUIRED in production
+    ->withClientIpResolver(fn($r) => $r->getServerParams()['REMOTE_ADDR'] ?? null)
     ->build();
+
+// In the form: <input type="hidden" name="_timestamp" value="<?= $honeypotMiddleware->generateTimestamp() ?>">
 ```
+
+> **Security notes**
+> - Without `withTimestampSecret()` the `_timestamp` field is unsigned and only checked when
+>   present, so bots can bypass the timing check. With a secret, a valid HMAC-signed token
+>   (`{unix}.{base64url(hmac_sha256)}`) is required; missing/malformed/forged tokens are violations.
+> - The default `InMemoryRateLimitStorage` does not persist between requests under PHP-FPM, so
+>   rate limiting is effectively disabled. Inject a persistent `RateLimitStorageInterface`.
+> - Rate limiting keys on `REMOTE_ADDR` unless a `clientIpResolver` is given; behind a proxy,
+>   supply a resolver that trusts only your proxy's header.
 
 ### Custom Middleware
 
