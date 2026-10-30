@@ -31,6 +31,10 @@ class CsrfMiddleware implements MiddlewareInterface
     private ?CacheInterface $cache;
     private int $maxFailedAttempts;
     private int $failureWindowSeconds;
+    /** @var (\Closure(ServerRequestInterface): ?string)|null */
+    private ?\Closure $clientIpResolver;
+    /** @var (\Closure(ServerRequestInterface, string): ResponseInterface)|null */
+    private ?\Closure $failureResponseFactory;
 
     /**
      * @param CsrfProtectionStrategyInterface $strategy      CSRF protection strategy.
@@ -40,6 +44,11 @@ class CsrfMiddleware implements MiddlewareInterface
      *                                                         When null, rate limiting is disabled.
      * @param int                             $maxFailedAttempts Max failures before blocking (per IP per window).
      * @param int                             $failureWindowSeconds Rolling window in seconds.
+     * @param callable|null $clientIpResolver  callable(ServerRequestInterface): ?string returning the client
+     *                                          IP used for rate limiting/logging. Default: REMOTE_ADDR only
+     *                                          (X-Forwarded-For is NOT trusted unless your resolver does so).
+     * @param callable|null $failureResponseFactory callable(ServerRequestInterface $request, string $reason): ResponseInterface
+     *                                          building the failure response. Default: 403 JSON.
      */
     public function __construct(
         CsrfProtectionStrategyInterface $strategy,
@@ -48,7 +57,11 @@ class CsrfMiddleware implements MiddlewareInterface
         ?CacheInterface $cache = null,
         int $maxFailedAttempts = 5,
         int $failureWindowSeconds = 3600,
+        ?callable $clientIpResolver = null,
+        ?callable $failureResponseFactory = null,
     ) {
+        $this->clientIpResolver       = $clientIpResolver !== null ? \Closure::fromCallable($clientIpResolver) : null;
+        $this->failureResponseFactory = $failureResponseFactory !== null ? \Closure::fromCallable($failureResponseFactory) : null;
         $this->strategy             = $strategy;
         $this->logger               = $logger ?? new NullLogger();
         $this->responseFactory      = new Psr17Factory();
@@ -74,7 +87,7 @@ class CsrfMiddleware implements MiddlewareInterface
                     'ip_address' => $ip,
                     'uri'        => (string)$request->getUri(),
                 ]);
-                return $this->createForbiddenResponse('Too many failed requests');
+                return $this->fail($request, 'Too many failed requests');
             }
 
             try {
@@ -82,7 +95,7 @@ class CsrfMiddleware implements MiddlewareInterface
             } catch (CsrfException $e) {
                 $this->logFailedAttempt($request, $e);
                 $this->recordFailure($ip);
-                return $this->createForbiddenResponse($e->getMessage());
+                return $this->fail($request, $e->getMessage());
             }
         }
 
@@ -94,8 +107,22 @@ class CsrfMiddleware implements MiddlewareInterface
     // Rate limiting helpers
     // -------------------------------------------------------------------------
 
+    private function fail(ServerRequestInterface $request, string $reason): ResponseInterface
+    {
+        if ($this->failureResponseFactory !== null) {
+            return ($this->failureResponseFactory)($request, $reason);
+        }
+        return $this->createForbiddenResponse($reason);
+    }
+
     private function getClientIp(ServerRequestInterface $request): string
     {
+        if ($this->clientIpResolver !== null) {
+            $ip = ($this->clientIpResolver)($request);
+            if (is_string($ip) && $ip !== '') {
+                return $ip;
+            }
+        }
         return $request->getServerParams()['REMOTE_ADDR'] ?? 'unknown';
     }
 
@@ -130,13 +157,11 @@ class CsrfMiddleware implements MiddlewareInterface
      */
     private function logFailedAttempt(ServerRequestInterface $request, CsrfException $e): void
     {
-        $serverParams = $request->getServerParams();
-        
         $context = [
             'timestamp' => date('c'),
             'method' => $request->getMethod(),
             'uri' => (string)$request->getUri(),
-            'ip_address' => $serverParams['REMOTE_ADDR'] ?? 'unknown',
+            'ip_address' => $this->getClientIp($request),
             'user_agent' => $request->getHeaderLine('User-Agent'),
             'referer' => $request->getHeaderLine('Referer'),
             'error_type' => get_class($e),
