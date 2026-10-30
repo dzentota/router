@@ -60,11 +60,24 @@ class Router
     /**
      * @param ContainerInterface|null $container  PSR-11 container for handler DI (used by dispatch()).
      * @param LoggerInterface|null    $logger     PSR-3 logger for dispatch error reporting.
+     * @param bool                    $propagateExceptions Re-throw handler exceptions from dispatch()
+     *                                instead of converting them to a generic 500 response.
      */
     public function __construct(
         private readonly ?ContainerInterface $container = null,
         private readonly ?LoggerInterface    $logger    = null,
+        private bool $propagateExceptions = false,
     ) {}
+
+    /**
+     * Make dispatch() re-throw route handler exceptions (so outer global
+     * error-handling middleware can catch them) instead of returning a 500.
+     */
+    public function setPropagateExceptions(bool $propagate = true): self
+    {
+        $this->propagateExceptions = $propagate;
+        return $this;
+    }
 
     // -------------------------------------------------------------------------
     // Global & group middleware registration
@@ -866,7 +879,7 @@ class Router
         $layers = [
             ...$this->globalMiddleware,
             new RouteMatchMiddleware($this),
-            new RouteDispatchMiddleware($this->container, $this->logger),
+            new RouteDispatchMiddleware($this->container, $this->logger, $this->propagateExceptions),
         ];
 
         $stack = MiddlewareStack::create($finalHandler, ...$layers);

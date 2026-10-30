@@ -26,8 +26,19 @@ class RouteDispatchMiddleware implements MiddlewareInterface
     /** @var array<string, \ReflectionFunctionAbstract> Reflection cache keyed by handler identity. */
     private array $reflectionCache = [];
 
-    public function __construct(?ContainerInterface $container = null, ?LoggerInterface $logger = null)
-    {
+    private bool $propagateExceptions;
+
+    /**
+     * @param bool $propagateExceptions When true, exceptions thrown by route handlers are
+     *                                  re-thrown so an outer error-handling middleware can
+     *                                  handle them. Default false: log and return generic 500 JSON.
+     */
+    public function __construct(
+        ?ContainerInterface $container = null,
+        ?LoggerInterface $logger = null,
+        bool $propagateExceptions = false,
+    ) {
+        $this->propagateExceptions = $propagateExceptions;
         $this->container     = $container;
         $this->responseFactory = new Psr17Factory();
         $this->logger        = $logger ?? new NullLogger();
@@ -88,11 +99,15 @@ class RouteDispatchMiddleware implements MiddlewareInterface
                 $response = $this->createResponseFromContent($response);
             }
             return $response;
-        } catch (\InvalidArgumentException $e) {
-            $this->logger->error('Route dispatch configuration error: ' . $e->getMessage());
-            return $this->createErrorResponse(500, 'Internal server error');
         } catch (\Throwable $e) {
-            $this->logger->error('Route dispatch error: ' . $e->getMessage(), ['exception' => $e]);
+            if ($this->propagateExceptions) {
+                throw $e;
+            }
+            if (!$e instanceof \InvalidArgumentException) {
+                $this->logger->error('Route dispatch error: ' . $e->getMessage(), ['exception' => $e]);
+                return $this->createErrorResponse(500, 'Internal server error');
+            }
+            $this->logger->error('Route dispatch configuration error: ' . $e->getMessage());
             return $this->createErrorResponse(500, 'Internal server error');
         }
     }
