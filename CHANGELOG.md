@@ -12,6 +12,14 @@
 - `CsrfMiddleware` options `clientIpResolver` and `failureResponseFactory`.
 - `RouteDispatchMiddleware` `propagateExceptions` flag; `Router` constructor argument
   `propagateExceptions` and `Router::setPropagateExceptions()`.
+- `HoneypotMiddleware` options `timestampSecret` (HMAC-signed `_timestamp` tokens, required when
+  set), `maxTimestampAge` (default 3600) and `clientIpResolver`; matching builder methods
+  `withTimestampSecret()`, `withMaxTimestampAge()`, `withClientIpResolver()`.
+
+### Security
+- `HoneypotMiddleware`: array values in honeypot fields no longer raise a TypeError/notice and are
+  treated as filled. Documented that the unsigned timestamp is bypassable and that the default
+  in-memory rate-limit storage is ineffective under PHP-FPM.
 
 ### Changed
 - Requires PHP >= 8.3 (was 8.2).
