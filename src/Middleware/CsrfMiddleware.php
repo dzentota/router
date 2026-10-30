@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace dzentota\Router\Middleware;
 
 use dzentota\Router\Middleware\Contract\CsrfProtectionStrategyInterface;
+use dzentota\Router\Middleware\Contract\CsrfTokenProviderInterface;
 use dzentota\Router\Middleware\Exception\CsrfException;
 use dzentota\Router\Middleware\Exception\SecurityException;
 use Psr\Http\Message\ResponseInterface;
@@ -23,6 +24,9 @@ use Nyholm\Psr7\Factory\Psr17Factory;
  */
 class CsrfMiddleware implements MiddlewareInterface
 {
+    public const TOKEN_ATTRIBUTE = 'csrf_token';
+
+    private string $tokenAttribute;
     private CsrfProtectionStrategyInterface $strategy;
     private array $safeMethods = ['GET', 'HEAD', 'OPTIONS'];
     private LoggerInterface $logger;
@@ -49,6 +53,8 @@ class CsrfMiddleware implements MiddlewareInterface
      *                                          (X-Forwarded-For is NOT trusted unless your resolver does so).
      * @param callable|null $failureResponseFactory callable(ServerRequestInterface $request, string $reason): ResponseInterface
      *                                          building the failure response. Default: 403 JSON.
+     * @param string        $tokenAttribute     Request attribute under which the form token is exposed to
+     *                                          handlers (strategies implementing CsrfTokenProviderInterface).
      */
     public function __construct(
         CsrfProtectionStrategyInterface $strategy,
@@ -59,7 +65,9 @@ class CsrfMiddleware implements MiddlewareInterface
         int $failureWindowSeconds = 3600,
         ?callable $clientIpResolver = null,
         ?callable $failureResponseFactory = null,
+        string $tokenAttribute = self::TOKEN_ATTRIBUTE,
     ) {
+        $this->tokenAttribute = $tokenAttribute;
         $this->clientIpResolver       = $clientIpResolver !== null ? \Closure::fromCallable($clientIpResolver) : null;
         $this->failureResponseFactory = $failureResponseFactory !== null ? \Closure::fromCallable($failureResponseFactory) : null;
         $this->strategy             = $strategy;
@@ -97,6 +105,10 @@ class CsrfMiddleware implements MiddlewareInterface
                 $this->recordFailure($ip);
                 return $this->fail($request, $e->getMessage());
             }
+        }
+
+        if ($this->strategy instanceof CsrfTokenProviderInterface) {
+            $request = $this->strategy->prepareRequest($request, $this->tokenAttribute);
         }
 
         $response = $handler->handle($request);

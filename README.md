@@ -463,6 +463,35 @@ class LoggingMiddleware implements MiddlewareInterface
 }
 ```
 
+### CSRF for server-rendered forms
+
+`CsrfMiddleware` exposes a form token to your handler **before** it runs, under the
+`csrf_token` request attribute (configurable via `tokenAttribute:`), for strategies
+implementing `CsrfTokenProviderInterface` (both built-in strategies do). Embed it as
+the `_token` hidden field (or send it as `X-CSRF-TOKEN`).
+
+```php
+// Stateless: signed double-submit cookie. On the visitor's first GET the cookie
+// token is generated up-front, so the form token is valid immediately.
+$csrf = new CsrfMiddleware(new SignedDoubleSubmitCookieStrategy(new TokenGenerator(), $secret));
+
+// Stateful: synchronizer tokens. Resolve the session id however you like
+// (no dependency on any session library); falls back to the `session_id` attribute.
+$csrf = new CsrfMiddleware(
+    new SynchronizerTokenStrategy(
+        new TokenGenerator(), $psr16Cache,
+        sessionIdResolver: fn (ServerRequestInterface $r): ?string => $r->getCookieParams()['SID'] ?? null,
+    ),
+    cache: $psr16Cache,                       // failure rate limiting
+    clientIpResolver: fn ($r) => $r->getAttribute('client_ip'), // default: REMOTE_ADDR only; X-Forwarded-For is never trusted implicitly
+    failureResponseFactory: fn ($r, string $reason) => $htmlErrorResponse, // default: 403 JSON
+);
+
+// In the handler / template:
+$token = $request->getAttribute('csrf_token'); // null if no token could be issued (e.g. no session)
+echo '<input type="hidden" name="_token" value="' . htmlspecialchars($token) . '">';
+```
+
 ## Simple Dispatch API
 
 `dispatch()` is the recommended single entry point for most applications. It automatically
@@ -579,6 +608,19 @@ try {
 } catch (MethodNotAllowedException $e) {
     // 405 — $e->getAllowedMethods() returns the permitted methods
 }
+```
+
+### Propagating handler exceptions
+
+By default `RouteDispatchMiddleware` logs handler exceptions and returns a generic
+500 JSON response. To let an outer error-handling middleware see them:
+
+```php
+$router = new Router($container, $logger, propagateExceptions: true);
+// or
+$router->setPropagateExceptions(true);
+// or, when composing the stack yourself
+new RouteDispatchMiddleware($container, $logger, propagateExceptions: true);
 ```
 
 ## Performance
